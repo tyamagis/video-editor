@@ -90,6 +90,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(Bpm));
             OnPropertyChanged(nameof(GridMode));
+            OnPropertyChanged(nameof(ExportInSeconds));
+            OnPropertyChanged(nameof(ExportOutSeconds));
+            OnPropertyChanged(nameof(ExportRangeLabel));
             NotifyTimelineChanged();
         }
     }
@@ -179,6 +182,72 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         get => _previewResolution;
         set { _previewResolution = value; OnPropertyChanged(); PreviewInvalidated?.Invoke(this, EventArgs.Empty); }
+    }
+
+    /// <summary>書き出し範囲の開始（秒）。</summary>
+    public double ExportInSeconds
+    {
+        get => Project.ExportInSeconds;
+        set
+        {
+            Project.ExportInSeconds = Math.Max(0, value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ExportRangeLabel));
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>書き出し範囲の終了（秒）。0 は末尾まで。</summary>
+    public double ExportOutSeconds
+    {
+        get => Project.ExportOutSeconds;
+        set
+        {
+            Project.ExportOutSeconds = Math.Max(0, value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ExportRangeLabel));
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>書き出し範囲の表示（例：書き出し範囲： 2.0s 〜 10.0s）。</summary>
+    public string ExportRangeLabel
+    {
+        get
+        {
+            var start = Project.EffectiveExportInSeconds;
+            var end = Project.EffectiveExportOutSeconds;
+            var whole = start <= 0 && end >= Project.DurationSeconds;
+            return whole
+                ? "書き出し範囲：全体"
+                : $"書き出し範囲： {start:F1}s 〜 {end:F1}s";
+        }
+    }
+
+    /// <summary>書き出し範囲の開始を再生ヘッド位置にする。</summary>
+    public void SetExportInAtPlayhead()
+    {
+        ExportInSeconds = PlayheadSeconds;
+        StatusMessage = $"書き出し範囲の開始： {PlayheadSeconds:F1}s";
+    }
+
+    /// <summary>書き出し範囲の終了を再生ヘッド位置にする。</summary>
+    public void SetExportOutAtPlayhead()
+    {
+        ExportOutSeconds = PlayheadSeconds;
+        StatusMessage = $"書き出し範囲の終了： {PlayheadSeconds:F1}s";
+    }
+
+    /// <summary>書き出し範囲を全体に戻す。</summary>
+    public void ClearExportRange()
+    {
+        Project.ExportInSeconds = 0;
+        Project.ExportOutSeconds = 0;
+        OnPropertyChanged(nameof(ExportInSeconds));
+        OnPropertyChanged(nameof(ExportOutSeconds));
+        OnPropertyChanged(nameof(ExportRangeLabel));
+        NotifyTimelineChanged();
+        StatusMessage = "書き出し範囲を全体に戻しました。";
     }
 
     public string StatusMessage
@@ -318,8 +387,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             clip.SourcePath, clip.InPointSeconds, clip.DurationSeconds,
             outputPath, settings, progress, ct);
 
-    public Task<SKBitmap> RenderPreviewAsync(double timeSeconds, CancellationToken ct = default)
-        => _previewRenderer.RenderPreviewAsync(Project, timeSeconds, PreviewResolution, ct);
+    public Task<SKBitmap> RenderPreviewAsync(
+        double timeSeconds, (int Width, int Height)? maxDisplaySize = null,
+        CancellationToken ct = default)
+        => _previewRenderer.RenderPreviewAsync(Project, timeSeconds, PreviewResolution, maxDisplaySize, ct);
 
     public WaveformData? GetWaveform(string sourcePath)
         => Waveforms.TryGetValue(sourcePath, out var data) ? data : null;

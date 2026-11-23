@@ -13,6 +13,10 @@
         <MenuItem Header="プロジェクトを開く" Click="LoadMenu_Click" />
         <Separator />
         <MenuItem Header="MP4で書き出す" Click="ExportMenu_Click" />
+        <Separator />
+        <MenuItem Header="書き出し範囲の開始を再生ヘッドに設定 (I)" Click="ExportInMenu_Click" />
+        <MenuItem Header="書き出し範囲の終了を再生ヘッドに設定 (O)" Click="ExportOutMenu_Click" />
+        <MenuItem Header="書き出し範囲を全体に戻す" Click="ExportRangeClearMenu_Click" />
       </MenuItem>
       <MenuItem Header="編集">
         <MenuItem Header="再生ヘッドで分割 (S)" Click="SplitMenu_Click" />
@@ -25,7 +29,7 @@
       <Button Content="分割" Command="{Binding SplitCommand}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" />
       <Button Content="削除" Command="{Binding DeleteClipCommand}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" />
       <Button Content="テキスト追加" Command="{Binding AddTextClipCommand}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" />
-      <Separator />
+      <Border Width="1" Background="{StaticResource ControlBorder}" Margin="6,2" />
       <TextBlock Text="BPM" VerticalAlignment="Center" Margin="4,0" Foreground="{StaticResource AppForeground}" />
       <TextBox Text="{Binding Bpm, UpdateSourceTrigger=PropertyChanged}" Width="60" VerticalAlignment="Center" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
       <TextBlock Text="プレビュー" VerticalAlignment="Center" Margin="12,0,4,0" Foreground="{StaticResource AppForeground}" />
@@ -34,6 +38,7 @@
         <ComboBoxItem Content="1/2" />
         <ComboBoxItem Content="1/4" />
       </ComboBox>
+      <TextBlock Text="{Binding ExportRangeLabel}" VerticalAlignment="Center" Margin="12,0,4,0" Foreground="{StaticResource AppForeground}" />
     </ToolBar>
 
     <StatusBar DockPanel.Dock="Bottom" Background="{StaticResource PanelBackground}" Foreground="{StaticResource AppForeground}">
@@ -67,6 +72,28 @@
             <ListBox.ItemContainerStyle>
               <Style TargetType="ListBoxItem">
                 <EventSetter Event="MouseDoubleClick" Handler="MediaItem_MouseDoubleClick" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{StaticResource AppForeground}" />
+                <Setter Property="Padding" Value="6,3" />
+                <Setter Property="Template">
+                  <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                      <Border x:Name="border" Background="{TemplateBinding Background}"
+                              Padding="{TemplateBinding Padding}" CornerRadius="3">
+                        <ContentPresenter />
+                      </Border>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                          <Setter TargetName="border" Property="Background" Value="#333333" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                          <Setter TargetName="border" Property="Background" Value="#3D3D3D" />
+                          <Setter Property="Foreground" Value="#FFFFFF" />
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </Setter.Value>
+                </Setter>
               </Style>
             </ListBox.ItemContainerStyle>
           </ListBox>

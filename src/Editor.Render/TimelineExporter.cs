@@ -36,7 +36,9 @@ public sealed class FrameSequenceExporter : ITimelineExporter
         IProgress<double>? progress = null, CancellationToken ct = default)
     {
         settings.Validate();
-        var totalFrames = Math.Max(1, (int)Math.Ceiling(project.DurationSeconds * settings.FrameRate));
+        var startSeconds = project.EffectiveExportInSeconds;
+        var endSeconds = project.EffectiveExportOutSeconds;
+        var totalFrames = Math.Max(1, (int)Math.Ceiling((endSeconds - startSeconds) * settings.FrameRate));
 
         var args = $"-y -f rawvideo -pix_fmt bgra -s {settings.Width}x{settings.Height} " +
                    $"-r {settings.FrameRate} -i - -an " +
@@ -66,7 +68,7 @@ public sealed class FrameSequenceExporter : ITimelineExporter
             for (var i = 0; i < totalFrames; i++)
             {
                 ct.ThrowIfCancellationRequested();
-                var timeSeconds = (double)i / settings.FrameRate;
+                var timeSeconds = startSeconds + (double)i / settings.FrameRate;
 
                 using var frame = await _renderer
                     .RenderFrameAsync(project, timeSeconds, settings.Width, settings.Height, ct)

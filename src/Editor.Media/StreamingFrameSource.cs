@@ -36,6 +36,9 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
     private Session? _session;
     private bool _disposed;
 
+    /// <summary>ハードウェアデコードが使えない環境と分かったら true（以後ソフトウェアで動く）。</summary>
+    private bool _hwaccelDisabled;
+
     public StreamingFrameSource(FfmpegSettings settings, MediaProbe probe)
     {
         _settings = settings;
@@ -71,6 +74,16 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
                 var frame = await ReadFrameAsync(session, ct).ConfigureAwait(false);
                 if (frame is null)
                 {
+                    // 1フレームも読めずに終わった場合、ハードウェアデコードが
+                    // 原因かもしれないので、1回だけソフトウェアで張り直す。
+                    if (session.NextIndex == 0 && session.Hwaccel && !_hwaccelDisabled)
+                    {
+                        _hwaccelDisabled = true;
+                        await StartSessionAsync(sourcePath, timeSeconds, maxWidth, outHeight, frameBytes, ct)
+                            .ConfigureAwait(false);
+                        session = _session!;
+                        continue;
+                    }
                     session.Ended = true;
                     return null; // 終端まで読んだ。
                 }
@@ -118,7 +131,11 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
     {
         DisposeSession();
 
-        var args = $"-nostdin -loglevel error -ss {startSeconds:F3} -i \"{sourcePath}\" " +
+        // ハードウェアデコード（GPU）が使えればデコードを GPU に逃がす。
+        // 使えない環境では起動直後にフレームが出ないので、呼び出し側で
+        // ソフトウェアに切り替えて張り直す（GetFrameAsync 参照）。
+        var hwaccel = _hwaccelDisabled ? string.Empty : "-hwaccel auto ";
+        var args = $"-nostdin -loglevel error {hwaccel}-ss {startSeconds:F3} -i \"{sourcePath}\" " +
                    $"-an -vf scale={maxWidth}:{outHeight} -pix_fmt bgra -f rawvideo -";
         var startInfo = new ProcessStartInfo
         {
@@ -152,6 +169,7 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
             Height = outHeight,
             FrameBytes = frameBytes,
             StartSeconds = startSeconds,
+            Hwaccel = !_hwaccelDisabled,
             Process = process,
             Stream = process.StandardOutput.BaseStream,
             LastTime = startSeconds
@@ -261,6 +279,7 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         public required int Height { get; init; }
         public required int FrameBytes { get; init; }
         public required double StartSeconds { get; init; }
+        public required bool Hwaccel { get; init; }
         public required Process Process { get; init; }
         public required Stream Stream { get; init; }
         public int NextIndex { get; set; }

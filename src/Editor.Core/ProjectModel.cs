@@ -203,6 +203,25 @@ public sealed class EditorProject
     /// <summary>BPM（手動設定。既定120）。拍グリッドの基準になる。</summary>
     public double Bpm { get; set; } = 120.0;
 
+    /// <summary>書き出し範囲の開始（秒）。0 は先頭。</summary>
+    public double ExportInSeconds { get; set; }
+
+    /// <summary>書き出し範囲の終了（秒）。0 または開始以下は末尾まで。</summary>
+    public double ExportOutSeconds { get; set; }
+
+    /// <summary>書き出し範囲の開始（0〜全体の長さに丸める）。</summary>
+    public double EffectiveExportInSeconds => Math.Clamp(ExportInSeconds, 0, DurationSeconds);
+
+    /// <summary>書き出し範囲の終了（0・開始以下なら末尾）。</summary>
+    public double EffectiveExportOutSeconds
+    {
+        get
+        {
+            var end = ExportOutSeconds > EffectiveExportInSeconds ? ExportOutSeconds : DurationSeconds;
+            return Math.Clamp(end, EffectiveExportInSeconds, DurationSeconds);
+        }
+    }
+
     /// <summary>最初の拍の時刻（秒）。BPMと合わせて拍位置を決める。</summary>
     public double BeatOffsetSeconds { get; set; }
 

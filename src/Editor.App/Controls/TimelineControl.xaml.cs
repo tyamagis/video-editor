@@ -163,7 +163,34 @@ public partial class TimelineControl : UserControl
         _clipRects.Clear();
         DrawRuler(canvas, info.Width);
         DrawTracks(canvas, info.Width);
+        DrawExportRange(canvas, info.Width, info.Height);
         DrawPlayhead(canvas, info.Height);
+    }
+
+    /// <summary>書き出し範囲を描く。範囲外を暗くし、In/Out に線を引く。全体のときは描かない。</summary>
+    private void DrawExportRange(SKCanvas canvas, int width, float height)
+    {
+        if (Project is null)
+            return;
+        var start = Project.EffectiveExportInSeconds;
+        var end = Project.EffectiveExportOutSeconds;
+        if (start <= 0 && end >= Project.DurationSeconds)
+            return; // 全体が範囲のときは描かない。
+        if (end <= start)
+            return;
+
+        var x0 = (float)(start * PixelsPerSecond);
+        var x1 = (float)(end * PixelsPerSecond);
+        using var dimPaint = new SKPaint { Color = SKColors.Black.WithAlpha(90) };
+        if (x0 > 0)
+            canvas.DrawRect(0, 0, x0, height, dimPaint);
+        if (x1 < width)
+            canvas.DrawRect(x1, 0, width - x1, height, dimPaint);
+
+        using var inPaint = new SKPaint { Color = SKColors.LightGreen, StrokeWidth = 2 };
+        using var outPaint = new SKPaint { Color = SKColors.OrangeRed, StrokeWidth = 2 };
+        canvas.DrawLine(x0, 0, x0, height, inPaint);
+        canvas.DrawLine(x1, 0, x1, height, outPaint);
     }
 
     private void DrawRuler(SKCanvas canvas, int width)

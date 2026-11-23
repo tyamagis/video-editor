@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using Editor.Core;
 using Editor.Media;
 using Editor.Render;
@@ -87,7 +88,8 @@ public partial class MainWindow : Window
         _rendering = true;
         try
         {
-            var bitmap = await _viewModel.RenderPreviewAsync(_viewModel.PlayheadSeconds).ConfigureAwait(true);
+            var maxSize = GetPreviewDisplaySize();
+            var bitmap = await _viewModel.RenderPreviewAsync(_viewModel.PlayheadSeconds, maxSize).ConfigureAwait(true);
             PreviewControl.Bitmap = bitmap;
             PreviewControl.InvalidatePreview();
         }
@@ -101,12 +103,30 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>プレビュー表示の実寸（物理ピクセル）。画面より大きく描かないための上限。</summary>
+    private (int Width, int Height)? GetPreviewDisplaySize()
+    {
+        if (PreviewControl.ActualWidth <= 0 || PreviewControl.ActualHeight <= 0)
+            return null;
+        var dpi = VisualTreeHelper.GetDpi(PreviewControl);
+        var w = (int)(PreviewControl.ActualWidth * dpi.PixelsPerDip);
+        var h = (int)(PreviewControl.ActualHeight * dpi.PixelsPerDip);
+        return (Math.Max(2, w), Math.Max(2, h));
+    }
+
     private void MainWindow_KeyDown(object sender, KeyEventArgs e)
     {
+        // テキスト入力中・コンボボックス操作中はショートカットを無効化する。
+        if (Keyboard.FocusedElement is TextBox or ComboBox)
+            return;
         if (e.Key == Key.S)
             _viewModel.SplitAtPlayhead();
         else if (e.Key == Key.Delete)
             _viewModel.DeleteSelectedClip();
+        else if (e.Key == Key.I)
+            _viewModel.SetExportInAtPlayhead();
+        else if (e.Key == Key.O)
+            _viewModel.SetExportOutAtPlayhead();
     }
 
     /// <summary>Space で再生・停止を切り替える。テキスト入力中とコンボボックス操作中は除外する。</summary>
@@ -237,6 +257,12 @@ public partial class MainWindow : Window
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
+
+    private void ExportInMenu_Click(object sender, RoutedEventArgs e) => _viewModel.SetExportInAtPlayhead();
+
+    private void ExportOutMenu_Click(object sender, RoutedEventArgs e) => _viewModel.SetExportOutAtPlayhead();
+
+    private void ExportRangeClearMenu_Click(object sender, RoutedEventArgs e) => _viewModel.ClearExportRange();
 
     private void SplitMenu_Click(object sender, RoutedEventArgs e) => _viewModel.SplitAtPlayhead();
 
