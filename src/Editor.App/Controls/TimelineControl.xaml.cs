@@ -179,11 +179,16 @@ public partial class TimelineControl : UserControl
 
         if (GridMode == GridMode.Beat)
         {
-            var beats = BeatGridCalculator.GetBeatTimes(Project.Bpm, Project.BeatOffsetSeconds, duration);
+            // 毎フレーム List を確保しないよう、拍時刻は等間隔の計算で回す。
+            // i は拍番号（0始まり）で、リスト版と一致する。
+            var interval = BeatGridCalculator.BeatIntervalSeconds(Project.Bpm);
             var lastLabelX = -1000f;
-            for (var i = 0; i < beats.Count; i++)
+            for (var i = 0; ; i++)
             {
-                var x = (float)(beats[i] * PixelsPerSecond);
+                var t = Project.BeatOffsetSeconds + i * interval;
+                if (t > duration)
+                    break;
+                var x = (float)(t * PixelsPerSecond);
                 if (x > width)
                     break;
                 var isBar = BeatGridCalculator.IsBarStart(i);
@@ -250,11 +255,11 @@ public partial class TimelineControl : UserControl
             canvas.DrawText(track.Name, 6, y + 16, textPaint);
 
             foreach (var clip in track.Clips)
-                DrawClip(canvas, clip, y);
+                DrawClip(canvas, clip, y, width);
         }
     }
 
-    private void DrawClip(SKCanvas canvas, Clip clip, float laneY)
+    private void DrawClip(SKCanvas canvas, Clip clip, float laneY, float visibleWidth)
     {
         var x = (float)(clip.StartSeconds * PixelsPerSecond);
         var w = (float)(clip.DurationSeconds * PixelsPerSecond);
@@ -281,7 +286,7 @@ public partial class TimelineControl : UserControl
         canvas.DrawRoundRect(rect, 4, 4, strokePaint);
 
         if (ShowWaveform && clip.Kind == ClipKind.Audio)
-            DrawWaveform(canvas, clip, rect);
+            DrawWaveform(canvas, clip, rect, visibleWidth);
 
         if (w > 30)
         {
@@ -290,21 +295,28 @@ public partial class TimelineControl : UserControl
         }
     }
 
-    private void DrawWaveform(SKCanvas canvas, Clip clip, SKRect rect)
+    private void DrawWaveform(SKCanvas canvas, Clip clip, SKRect rect, float visibleWidth)
     {
         var data = WaveformProvider?.Invoke(clip);
-        if (data is null || data.BucketCount == 0)
+        if (data is null || data.BucketCount == 0 || rect.Width <= 0)
+            return;
+
+        // 画面に見えている範囲だけ描く。長いクリップ全体のパスを作ると、
+        // 再生中の毎フレームで数万点のパスを作り直すことになる。
+        var visibleLeft = Math.Max(rect.Left, 0);
+        var visibleRight = Math.Min(rect.Right, visibleWidth);
+        if (visibleRight <= visibleLeft)
             return;
 
         var centerY = rect.MidY;
         var halfHeight = rect.Height / 2 - 4;
-        var steps = Math.Max(2, (int)rect.Width);
+        var steps = Math.Max(2, (int)(visibleRight - visibleLeft));
 
         using var path = new SKPath();
         for (var sx = 0; sx <= steps; sx++)
         {
-            var bucket = Math.Min(data.BucketCount - 1, (int)((double)sx / steps * data.BucketCount));
-            var x = rect.Left + sx;
+            var x = visibleLeft + sx;
+            var bucket = Math.Min(data.BucketCount - 1, (int)((x - rect.Left) / rect.Width * data.BucketCount));
             var yTop = centerY - data.MaxPeaks[bucket] * halfHeight;
             if (sx == 0)
                 path.MoveTo(x, (float)yTop);
@@ -313,8 +325,8 @@ public partial class TimelineControl : UserControl
         }
         for (var sx = steps; sx >= 0; sx--)
         {
-            var bucket = Math.Min(data.BucketCount - 1, (int)((double)sx / steps * data.BucketCount));
-            var x = rect.Left + sx;
+            var x = visibleLeft + sx;
+            var bucket = Math.Min(data.BucketCount - 1, (int)((x - rect.Left) / rect.Width * data.BucketCount));
             var yBottom = centerY - data.MinPeaks[bucket] * halfHeight;
             path.LineTo(x, (float)yBottom);
         }
