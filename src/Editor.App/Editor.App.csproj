@@ -11,10 +11,11 @@
 
   <ItemGroup>
     <!-- プレビュー表示：SkiaSharp.Views.WPF（SKElement） -->
+    <!-- 注意：SKPaintSurfaceEventArgs は SkiaSharp.Views.Desktop「名前空間」にあるが、
+         NuGetパッケージとしての SkiaSharp.Views.Desktop は存在しない。
+         型は SkiaSharp.Views.WPF が含んでいるので、using だけで解決する。 -->
     <PackageReference Include="SkiaSharp" Version="2.88.9" />
     <PackageReference Include="SkiaSharp.Views.WPF" Version="2.88.9" />
-    <!-- SKPaintSurfaceEventArgs は SkiaSharp.Views.Desktop 名前空間にあるため明示参照 -->
-    <PackageReference Include="SkiaSharp.Views.Desktop" Version="2.88.9" />
   </ItemGroup>
 
   <ItemGroup>
