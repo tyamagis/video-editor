@@ -3,6 +3,7 @@
 // プレビューと書き出しは同じ描画コードを使うため、表示の一致が保たれる。
 // 映像フレームは Editor.Media から取得し、テキストは直接描く。
 
+using System.IO;
 using Editor.Core;
 using Editor.Media;
 using SkiaSharp;

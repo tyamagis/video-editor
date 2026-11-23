@@ -2,6 +2,7 @@
 // JSON形式。素材は含めずパス参照のみ。Version番号を持ち、
 // 古い版は読み込み時に移行する（現時点では v1 のみ）。
 
+using System.IO;
 using System.Text.Json;
 
 namespace Editor.Core;

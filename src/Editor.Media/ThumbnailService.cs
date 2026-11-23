@@ -3,6 +3,8 @@
 // プレビュー描画（Editor.Render）はこのバイト列を SkiaSharp で開く。
 // 連続再生時の再抽出を避けるため、直近1フレームだけキャッシュする。
 
+using System.IO;
+
 namespace Editor.Media;
 
 /// <summary>指定時刻の映像フレームを PNG バイト列で取得する口。</summary>

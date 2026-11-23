@@ -2,6 +2,7 @@
 // タイムラインの波形表示は、区間ごとの最大・最小振幅だけを使う。
 // 全サンプルを保持しないため、長時間素材でも表示が重くならない。
 
+using System.IO;
 using NAudio.Wave;
 
 namespace Editor.Audio;

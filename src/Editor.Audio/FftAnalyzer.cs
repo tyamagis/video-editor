@@ -3,6 +3,7 @@
 // 実現できないことが出てきた場合に検討する（決定事項）。
 // 解析は事前にフレームごと行い、キャッシュする。再生中に都度FFTはしない。
 
+using System.IO;
 using MathNet.Numerics;
 using MathNet.Numerics.IntegralTransforms;
 using NAudio.Wave;

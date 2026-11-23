@@ -3,6 +3,7 @@
 // 当面は OS インストール済みの ffmpeg / ffprobe を PATH から使う。
 // 実行ファイルの場所は設定で変えられる。
 
+using System.IO;
 using FFMpegCore;
 
 namespace Editor.Media;

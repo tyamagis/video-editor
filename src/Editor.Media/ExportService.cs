@@ -4,6 +4,8 @@
 // タイムライン全体の書き出しは Editor.Render の FrameSequenceExporter が
 // フレームを順に描いて ffmpeg にパイプする（同じ ExportSettings を使う）。
 
+using System.IO;
+
 namespace Editor.Media;
 
 /// <summary>書き出し設定。解像度とフレームレート、画質の組み合わせ。</summary>

@@ -2,6 +2,7 @@
 // 解像度・fps・長さを調べ、タイムライン配置と書き出し設定の元にする。
 // 主系は FFMpegCore の FFProbe、失敗時は ffprobe CLI の JSON にフォールバックする。
 
+using System.IO;
 using System.Text.Json;
 using FFMpegCore;
 
