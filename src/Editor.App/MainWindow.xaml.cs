@@ -3,6 +3,7 @@
 
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using Editor.Core;
 using Editor.Media;
@@ -15,6 +16,7 @@ public partial class MainWindow : Window
 {
     private MainViewModel _viewModel = null!;
     private bool _rendering;
+    private Point _mediaDragStart;
 
     public MainWindow()
     {
@@ -33,6 +35,12 @@ public partial class MainWindow : Window
         TimelineControl.WaveformProvider = clip => _viewModel.GetWaveform(clip.SourcePath);
 
         TimelineControl.SeekRequested += (_, time) => _viewModel.PlayheadSeconds = time;
+        TimelineControl.MediaDropped += (_, drop) =>
+        {
+            var item = _viewModel.MediaItems.FirstOrDefault(m => m.SourcePath == drop.SourcePath);
+            if (item is not null)
+                _viewModel.AddMediaToTimeline(item, drop.TimeSeconds);
+        };
         TimelineControl.ClipSelected += (_, clip) => _viewModel.SelectedClip = clip;
         TimelineControl.SplitRequested += (_, _) => _viewModel.SplitAtPlayhead();
         TimelineControl.TimelineChanged += (_, _) => _viewModel.NotifyTimelineChanged();
@@ -128,6 +136,37 @@ public partial class MainWindow : Window
     {
         if (_viewModel.SelectedMediaItem is not null)
             _viewModel.AddMediaToTimeline(_viewModel.SelectedMediaItem);
+    }
+
+    private void MediaItem_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is ListBoxItem { DataContext: MediaItem item })
+            _viewModel.AddMediaToTimeline(item);
+    }
+
+    private void AddToTimelineButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.SelectedMediaItem is { } item)
+            _viewModel.AddMediaToTimeline(item);
+    }
+
+    private void MediaList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _mediaDragStart = e.GetPosition(null);
+    }
+
+    private void MediaList_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed)
+            return;
+        var pos = e.GetPosition(null);
+        if (Math.Abs(pos.X - _mediaDragStart.X) < SystemParameters.MinimumHorizontalDragDistance
+            && Math.Abs(pos.Y - _mediaDragStart.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return;
+        if (_viewModel.SelectedMediaItem is not { } item)
+            return;
+        DragDrop.DoDragDrop((DependencyObject)sender,
+            new DataObject(DataFormats.StringFormat, item.SourcePath), DragDropEffects.Copy);
     }
 
     private void SaveMenu_Click(object sender, RoutedEventArgs e)

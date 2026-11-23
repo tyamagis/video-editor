@@ -20,6 +20,10 @@ public partial class TimelineControl : UserControl
     private const float TrackHeight = 64f;
     private const float TrackGap = 4f;
 
+    // 日本語（「小節」など）が□で表示されないよう、日本語対応フォントを使う。
+    private static readonly SKTypeface JapaneseTypeface =
+        SKTypeface.FromFamilyName("Yu Gothic UI") ?? SKTypeface.Default;
+
     private readonly Dictionary<Clip, SKRect> _clipRects = new();
 
     private enum DragMode { None, Move, Trim }
@@ -66,6 +70,20 @@ public partial class TimelineControl : UserControl
         }
     }
 
+    /// <summary>素材がタイムラインにドロップされた（パスとドロップ位置の秒数）。</summary>
+    public sealed record MediaDropInfo(string SourcePath, double TimeSeconds);
+
+    /// <summary>素材プールから素材がドロップされた。</summary>
+    public event EventHandler<MediaDropInfo>? MediaDropped;
+
+    private static SKPaint CreateTextPaint(float textSize, SKColor color) => new()
+    {
+        Color = color,
+        TextSize = textSize,
+        IsAntialias = true,
+        Typeface = JapaneseTypeface
+    };
+
     /// <summary>再生ヘッドの移動要求（時刻・秒）。</summary>
     public event EventHandler<double>? SeekRequested;
     /// <summary>クリップがクリックされた。</summary>
@@ -106,6 +124,24 @@ public partial class TimelineControl : UserControl
         InvalidateTimeline();
     }
 
+    private void TimelineControl_DragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = e.Data.GetDataPresent(DataFormats.StringFormat)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void TimelineControl_Drop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.StringFormat))
+            return;
+        if (e.Data.GetData(DataFormats.StringFormat) is not string path)
+            return;
+        var pos = e.GetPosition(TimelineElement);
+        MediaDropped?.Invoke(this, new MediaDropInfo(path, Math.Max(0, pos.X / PixelsPerSecond)));
+    }
+
     private void SplitButton_Click(object sender, RoutedEventArgs e)
         => SplitRequested?.Invoke(this, EventArgs.Empty);
 
@@ -117,7 +153,7 @@ public partial class TimelineControl : UserControl
 
         if (Project is null)
         {
-            using var emptyPaint = new SKPaint { Color = SKColors.Gray, TextSize = 14, IsAntialias = true };
+            using var emptyPaint = CreateTextPaint(14, SKColors.Gray);
             canvas.DrawText("プロジェクトがありません", 12, 32, emptyPaint);
             return;
         }
@@ -136,11 +172,13 @@ public partial class TimelineControl : UserControl
         var duration = Math.Max(Project.DurationSeconds, 10);
         using var majorPaint = new SKPaint { Color = new SKColor(0x66, 0x66, 0x66), StrokeWidth = 1 };
         using var minorPaint = new SKPaint { Color = new SKColor(0x3A, 0x3A, 0x3A), StrokeWidth = 1 };
-        using var textPaint = new SKPaint { Color = SKColors.LightGray, TextSize = 11, IsAntialias = true };
+        using var textPaint = CreateTextPaint(11, SKColors.LightGray);
+        using var beatPaint = CreateTextPaint(10, new SKColor(0x99, 0x99, 0x99));
 
         if (GridMode == GridMode.Beat)
         {
             var beats = BeatGridCalculator.GetBeatTimes(Project.Bpm, Project.BeatOffsetSeconds, duration);
+            var lastLabelX = -1000f;
             for (var i = 0; i < beats.Count; i++)
             {
                 var x = (float)(beats[i] * PixelsPerSecond);
@@ -149,7 +187,19 @@ public partial class TimelineControl : UserControl
                 var isBar = BeatGridCalculator.IsBarStart(i);
                 canvas.DrawLine(x, 0, x, HeaderHeight, isBar ? majorPaint : minorPaint);
                 if (isBar)
-                    canvas.DrawText($"小節 {i / 4 + 1}", x + 3, 16, textPaint);
+                {
+                    // 小節ラベルは重ならない間隔があるときだけ描く
+                    if (x - lastLabelX >= 56)
+                    {
+                        canvas.DrawText($"小節 {i / 4 + 1}", x + 3, 16, textPaint);
+                        lastLabelX = x;
+                    }
+                }
+                else if (PixelsPerSecond >= 50)
+                {
+                    // 拡大時だけ拍番号（1〜4）を小さく描く
+                    canvas.DrawText($"{i % 4 + 1}", x + 3, 16, beatPaint);
+                }
             }
             return;
         }
@@ -184,7 +234,7 @@ public partial class TimelineControl : UserControl
 
         using var lanePaint = new SKPaint { Color = new SKColor(0x2A, 0x2A, 0x2A) };
         using var laneStroke = new SKPaint { Color = new SKColor(0x3A, 0x3A, 0x3A), Style = SKPaintStyle.Stroke };
-        using var textPaint = new SKPaint { Color = SKColors.LightGray, TextSize = 12, IsAntialias = true };
+        using var textPaint = CreateTextPaint(12, SKColors.LightGray);
 
         for (var i = 0; i < Project.Tracks.Count; i++)
         {
@@ -230,7 +280,7 @@ public partial class TimelineControl : UserControl
 
         if (w > 30)
         {
-            using var textPaint = new SKPaint { Color = SKColors.White, TextSize = 12, IsAntialias = true };
+            using var textPaint = CreateTextPaint(12, SKColors.White);
             canvas.DrawText(clip.Name, rect.Left + 6, rect.Top + 18, textPaint);
         }
     }

@@ -31,7 +31,8 @@ public partial class PreviewControl : UserControl
             {
                 Color = SKColors.Gray,
                 TextSize = 16,
-                IsAntialias = true
+                IsAntialias = true,
+                Typeface = SKTypeface.FromFamilyName("Yu Gothic UI") ?? SKTypeface.Default
             };
             canvas.DrawText("素材を読み込んでください", 16, 32, paint);
             return;

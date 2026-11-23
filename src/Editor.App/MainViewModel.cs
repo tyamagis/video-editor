@@ -206,25 +206,32 @@ public sealed class MainViewModel : INotifyPropertyChanged
         StatusMessage = $"読み込みました：{item.Name}";
     }
 
-    /// <summary>選択中の素材をタイムラインの末尾に配置する。</summary>
-    public void AddMediaToTimeline(MediaItem item)
+    /// <summary>選択中の素材をタイムラインに配置する。開始時刻を省略すると末尾に置く。</summary>
+    public void AddMediaToTimeline(MediaItem item) => AddMediaToTimeline(item, null);
+
+    public void AddMediaToTimeline(MediaItem item, double? startSeconds)
     {
         var kind = item.Info.HasVideo ? TrackKind.Video : TrackKind.Audio;
         var track = Project.Tracks.FirstOrDefault(t => t.Kind == kind)
             ?? Project.AddTrack(kind, kind == TrackKind.Video ? "ビデオ 1" : "オーディオ 1");
+
+        var duration = item.Info.Duration.TotalSeconds;
+        if (duration <= 0)
+            duration = 5; // 長さが取れなかった素材は5秒で置く（幅0で見えなくなるのを防ぐ）
 
         var clip = new Clip
         {
             Name = item.Name,
             Kind = item.Info.HasVideo ? ClipKind.Video : ClipKind.Audio,
             SourcePath = item.SourcePath,
-            StartSeconds = track.Clips.Select(c => c.EndSeconds).DefaultIfEmpty(0).Max(),
-            DurationSeconds = item.Info.Duration.TotalSeconds,
+            StartSeconds = startSeconds ?? track.Clips.Select(c => c.EndSeconds).DefaultIfEmpty(0).Max(),
+            DurationSeconds = duration,
             InPointSeconds = 0
         };
         track.Clips.Add(clip);
         SelectedClip = clip;
         NotifyTimelineChanged();
+        StatusMessage = $"タイムラインに追加しました：{item.Name}";
     }
 
     /// <summary>テキストクリップを再生ヘッド位置に追加する。</summary>
