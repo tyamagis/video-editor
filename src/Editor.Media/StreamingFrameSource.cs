@@ -101,7 +101,7 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         var s = _session;
         if (s is null || s.Ended)
             return false;
-        if (s.Process.HasExited)
+        if (HasExitedQuietly(s.Process))
             return false;
         if (s.SourcePath != sourcePath || s.MaxWidth != maxWidth)
             return false;
@@ -141,8 +141,8 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
             throw new InvalidOperationException($"ffmpeg の起動に失敗しました: {ex.Message}", ex);
         }
 
-        // stderr を読み捨てないとパイプが詰まって ffmpeg が止まる。
-        _ = process.StandardError.ReadToEndAsync();
+        // stderr を読み捨てないとパイプが詰まって ffmpeg が止まる。失敗は無視する。
+        _ = DrainStderrAsync(process.StandardError);
 
         _session = new Session
         {
@@ -198,14 +198,50 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
             return;
         try
         {
-            if (!s.Process.HasExited)
-                s.Process.Kill(entireProcessTree: true);
+            // Kill(entireProcessTree: true) は子プロセスを探すために全プロセスを
+            // 列挙し、保護されたプロセスで Win32Exception を吐いて Output を
+            // 埋め尽くす。ffmpeg に子プロセスはいないので単体 Kill で十分。
+            if (!HasExitedQuietly(s.Process))
+                s.Process.Kill();
         }
         catch
         {
             // 終了済み・権限なしなどは無視する。
         }
-        s.Process.Dispose();
+        try
+        {
+            s.Process.Dispose();
+        }
+        catch
+        {
+            // 破棄時の失敗は無視する。
+        }
+    }
+
+    /// <summary>HasExited が例外を吐く場合（ハンドル無効など）は終了扱いにする。</summary>
+    private static bool HasExitedQuietly(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    /// <summary>stderr を読み捨てる。プロセス終了時の失敗は無視する。</summary>
+    private static async Task DrainStderrAsync(StreamReader reader)
+    {
+        try
+        {
+            await reader.ReadToEndAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // 無視する。
+        }
     }
 
     public void Dispose()
