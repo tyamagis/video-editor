@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- プレビュー・書き出し描画：SkiaSharp（設計プラン 3章） -->
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Editor.Core\Editor.Core.csproj" />
+    <ProjectReference Include="..\Editor.Media\Editor.Media.csproj" />
+    <ProjectReference Include="..\Editor.Audio\Editor.Audio.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,199 @@
+// メインウィンドウ。ファイルダイアログと、ViewModel・タイムライン・
+// プレビュー間の配線だけを担う。編集ロジックは ViewModel / Core 側にある。
+
+using System.ComponentModel;
+using System.Windows;
+using System.Windows.Input;
+using Editor.Core;
+using Editor.Media;
+using Editor.Render;
+using Microsoft.Win32;
+
+namespace Editor.App;
+
+public partial class MainWindow : Window
+{
+    private MainViewModel _viewModel = null!;
+    private bool _rendering;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        Loaded += OnLoaded;
+        KeyDown += MainWindow_KeyDown;
+    }
+
+    private async void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        _viewModel = (MainViewModel)DataContext;
+
+        TimelineControl.Project = _viewModel.Project;
+        TimelineControl.GridMode = _viewModel.GridMode;
+        TimelineControl.ShowWaveform = _viewModel.ShowWaveform;
+        TimelineControl.WaveformProvider = clip => _viewModel.GetWaveform(clip.SourcePath);
+
+        TimelineControl.SeekRequested += (_, time) => _viewModel.PlayheadSeconds = time;
+        TimelineControl.ClipSelected += (_, clip) => _viewModel.SelectedClip = clip;
+        TimelineControl.SplitRequested += (_, _) => _viewModel.SplitAtPlayhead();
+        TimelineControl.TimelineChanged += (_, _) => _viewModel.NotifyTimelineChanged();
+        TimelineControl.GridModeChanged += (_, _) => _viewModel.GridMode = TimelineControl.GridMode;
+        TimelineControl.ShowWaveformChanged += (_, _) => _viewModel.ShowWaveform = TimelineControl.ShowWaveform;
+
+        _viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        _viewModel.PreviewInvalidated += async (_, _) => await UpdatePreviewAsync().ConfigureAwait(true);
+
+        if (!await _viewModel.CheckFfmpegAsync().ConfigureAwait(true))
+        {
+            MessageBox.Show(
+                "ffmpeg が見つかりません。ffmpeg をインストールし、PATHを通してから使ってください。\n" +
+                "読み込み・書き出しは ffmpeg が無いと動きません。",
+                "ffmpeg が見つかりません", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        await UpdatePreviewAsync().ConfigureAwait(true);
+    }
+
+    private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainViewModel.PlayheadSeconds))
+        {
+            TimelineControl.PlayheadSeconds = _viewModel.PlayheadSeconds;
+            TimelineControl.InvalidateTimeline();
+        }
+        else if (e.PropertyName == nameof(MainViewModel.Project))
+        {
+            TimelineControl.Project = _viewModel.Project;
+            TimelineControl.InvalidateTimeline();
+        }
+        else if (e.PropertyName == nameof(MainViewModel.GridMode))
+        {
+            TimelineControl.GridMode = _viewModel.GridMode;
+        }
+    }
+
+    private async Task UpdatePreviewAsync()
+    {
+        if (_rendering)
+            return;
+        _rendering = true;
+        try
+        {
+            var bitmap = await _viewModel.RenderPreviewAsync(_viewModel.PlayheadSeconds).ConfigureAwait(true);
+            PreviewControl.Bitmap = bitmap;
+            PreviewControl.InvalidatePreview();
+        }
+        catch (Exception ex)
+        {
+            _viewModel.StatusMessage = $"プレビュー描画に失敗しました：{ex.Message}";
+        }
+        finally
+        {
+            _rendering = false;
+        }
+    }
+
+    private void MainWindow_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.S)
+            _viewModel.SplitAtPlayhead();
+        else if (e.Key == Key.Delete)
+            _viewModel.DeleteSelectedClip();
+    }
+
+    private async void ImportMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Filter = "動画・音声|*.mp4;*.mov;*.mkv;*.wav;*.mp3;*.m4a;*.aac|画像|*.png;*.jpg;*.jpeg|すべてのファイル|*.*",
+            Multiselect = true
+        };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        foreach (var file in dialog.FileNames)
+        {
+            try
+            {
+                await _viewModel.AddMediaAsync(file).ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"{file} の読み込みに失敗しました：{ex.Message}",
+                    "読み込みエラー", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+    }
+
+    private void MediaList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (_viewModel.SelectedMediaItem is not null)
+            _viewModel.AddMediaToTimeline(_viewModel.SelectedMediaItem);
+    }
+
+    private void SaveMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Filter = "VideoEditor プロジェクト|*.veproj",
+            FileName = $"{_viewModel.Project.Name}.veproj"
+        };
+        if (dialog.ShowDialog() == true)
+            _viewModel.SaveProject(dialog.FileName);
+    }
+
+    private void LoadMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog { Filter = "VideoEditor プロジェクト|*.veproj" };
+        if (dialog.ShowDialog() != true)
+            return;
+        try
+        {
+            _viewModel.LoadProject(dialog.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"開けませんでした：{ex.Message}", "エラー",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void ExportMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Filter = "MP4 動画|*.mp4",
+            FileName = $"{_viewModel.Project.Name}.mp4"
+        };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        _viewModel.StatusMessage = "書き出しています…";
+        try
+        {
+            var progress = new Progress<double>(p =>
+                _viewModel.StatusMessage = $"書き出し中… {p:P0}");
+            await _viewModel.ExportTimelineAsync(dialog.FileName, ExportSettings.Hd30, progress)
+                .ConfigureAwait(true);
+            _viewModel.StatusMessage = $"書き出しました：{dialog.FileName}";
+            MessageBox.Show($"書き出しました：{dialog.FileName}", "書き出し完了",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            _viewModel.StatusMessage = $"書き出しに失敗しました：{ex.Message}";
+            MessageBox.Show($"書き出しに失敗しました：{ex.Message}", "エラー",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void SplitMenu_Click(object sender, RoutedEventArgs e) => _viewModel.SplitAtPlayhead();
+
+    private void DeleteMenu_Click(object sender, RoutedEventArgs e) => _viewModel.DeleteSelectedClip();
+
+    private void PreviewResBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_viewModel is null || PreviewResBox.SelectedIndex < 0)
+            return;
+        _viewModel.PreviewResolution = (PreviewResolution)PreviewResBox.SelectedIndex;
+    }
+}

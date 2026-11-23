@@ -1,0 +1,25 @@
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Oo]bj/
+[Bb]in/
+*.user
+*.suo
+.vs/
+*.userosscache
+*.sln.docstates
+
+## NuGet
+*.nupkg
+**/[Pp]ackages/
+!**/[Pp]ackages/build/
+
+## OS / editor
+.DS_Store
+Thumbs.db
+*.log
+
+## Project-local caches (regenerated)
+.cache/

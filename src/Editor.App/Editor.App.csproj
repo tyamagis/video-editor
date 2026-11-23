@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- プレビュー表示：SkiaSharp.Views.WPF（SKElement） -->
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.Views.WPF" Version="2.88.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Editor.Core\Editor.Core.csproj" />
+    <ProjectReference Include="..\Editor.Media\Editor.Media.csproj" />
+    <ProjectReference Include="..\Editor.Audio\Editor.Audio.csproj" />
+    <ProjectReference Include="..\Editor.Render\Editor.Render.csproj" />
+  </ItemGroup>
+
+</Project>
