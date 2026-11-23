@@ -161,8 +161,14 @@ public sealed class FrameSequenceExporter : ITimelineExporter
             var sourceEnd = clip.InPointSeconds + (overlapEnd - clip.StartSeconds);
             var delayMs = (long)Math.Round((overlapStart - startSeconds) * 1000);
             var label = $"a{index}";
+            // ノイズ除去が有効なクリップは、書き出し時に afftdn で背景ノイズを減らす
+            // （設計プラン 5章で FFmpeg のフィルタが第一候補。プレビューでは反映されない）。
+            // atrim の前に掛けることで、ファイル全体からノイズ特性を取る。
+            var denoise = clip.NoiseReductionEnabled
+                ? $"afftdn=nr={NoiseReductionDb(clip.NoiseReductionStrength):F1}:nf=-50,"
+                : string.Empty;
             // 書き出し範囲に入る部分だけ切り出し、範囲内の位置まで遅らせる。
-            var filter = $"[{index}:a]atrim=start={sourceStart:F3}:end={sourceEnd:F3}," +
+            var filter = $"[{index}:a]{denoise}atrim=start={sourceStart:F3}:end={sourceEnd:F3}," +
                          $"asetpts=PTS-STARTPTS,adelay={delayMs}:all=1[{label}]";
             inputs.Add(new AudioInput(clip.SourcePath, filter, label));
             index++;
@@ -174,6 +180,10 @@ public sealed class FrameSequenceExporter : ITimelineExporter
         var mapLabel = inputs.Count == 1 ? inputs[0].Label : "aout";
         return (inputs, mapLabel);
     }
+
+    /// <summary>ノイズ除去の強さ（0.0〜1.0）を afftdn の nr（dB、1〜30）に写す。</summary>
+    private static double NoiseReductionDb(double strength)
+        => 1.0 + Math.Clamp(strength, 0, 1) * 29.0;
 
     private sealed record AudioInput(string Path, string Filter, string Label);
 }

@@ -31,6 +31,9 @@ public partial class TimelineControl : UserControl
     private Clip? _dragClip;
     private double _dragOffsetX;
 
+    /// <summary>このドラッグでアンドゥ用の合図を出したか（1回のドラッグで1回だけ出す）。</summary>
+    private bool _editSnapshotTaken;
+
     private GridMode _gridMode = GridMode.Frame;
     private bool _showWaveform = true;
 
@@ -42,6 +45,22 @@ public partial class TimelineControl : UserControl
     public EditorProject? Project { get; set; }
     public double PlayheadSeconds { get; set; }
     public double PixelsPerSecond { get; set; } = 80;
+
+    private BeatMap? _detectedBeatMap;
+
+    /// <summary>
+    /// 検出済みのビートマップ（BPM自動検出・波形検出の結果。タイムライン時刻）。
+    /// 設定されているとき、拍グリッド表示は BPM からの算出ではなくこの拍時刻を描く。
+    /// </summary>
+    public BeatMap? DetectedBeatMap
+    {
+        get => _detectedBeatMap;
+        set
+        {
+            _detectedBeatMap = value;
+            InvalidateTimeline();
+        }
+    }
 
     /// <summary>クリップ → 波形データ。MainWindow が ViewModel 経由で渡す。</summary>
     public Func<Clip, WaveformData?>? WaveformProvider { get; set; }
@@ -93,6 +112,8 @@ public partial class TimelineControl : UserControl
     public event EventHandler? SplitRequested;
     /// <summary>ドラッグなどの編集が終わった。</summary>
     public event EventHandler? TimelineChanged;
+    /// <summary>クリップの移動・トリミングが実際に始まった（ドラッグの最初の動き）。アンドゥ用スナップショットを取る合図。</summary>
+    public event EventHandler? EditStarted;
     public event EventHandler? GridModeChanged;
     public event EventHandler? ShowWaveformChanged;
 
@@ -163,8 +184,41 @@ public partial class TimelineControl : UserControl
         _clipRects.Clear();
         DrawRuler(canvas, info.Width);
         DrawTracks(canvas, info.Width);
+        DrawTransitions(canvas);
         DrawExportRange(canvas, info.Width, info.Height);
         DrawPlayhead(canvas, info.Height);
+    }
+
+    /// <summary>トランジション区間を描く。境界を中心に前後 D/2 ずつの範囲を薄く色付けし、境界に線を引く。</summary>
+    private void DrawTransitions(SKCanvas canvas)
+    {
+        if (Project is null)
+            return;
+
+        using var zonePaint = new SKPaint { Color = SKColors.White.WithAlpha(28) };
+        using var linePaint = new SKPaint { Color = new SKColor(0xE8, 0xA3, 0x3D), StrokeWidth = 2, IsAntialias = true };
+
+        for (var i = 0; i < Project.Tracks.Count; i++)
+        {
+            var track = Project.Tracks[i];
+            var y = HeaderHeight + i * (TrackHeight + TrackGap);
+            var clips = track.Clips.OrderBy(c => c.StartSeconds).ToList();
+            for (var j = 1; j < clips.Count; j++)
+            {
+                var clip = clips[j];
+                if (clip.TransitionKind != TransitionKind.Dissolve)
+                    continue;
+                var prev = clips[j - 1];
+                var duration = TimelineEvaluator.GetEffectiveTransitionDuration(prev, clip);
+                if (duration <= 0)
+                    continue; // 隣り合っていない等、適用されない。
+                var x0 = (float)((clip.StartSeconds - duration / 2) * PixelsPerSecond);
+                var x1 = (float)((clip.StartSeconds + duration / 2) * PixelsPerSecond);
+                canvas.DrawRect(new SKRect(x0, y + 4, x1, y + TrackHeight - 4), zonePaint);
+                var bx = (float)(clip.StartSeconds * PixelsPerSecond);
+                canvas.DrawLine(bx, y + 4, bx, y + TrackHeight - 4, linePaint);
+            }
+        }
     }
 
     /// <summary>書き出し範囲を描く。範囲外を暗くし、In/Out に線を引く。全体のときは描かない。</summary>
@@ -206,6 +260,42 @@ public partial class TimelineControl : UserControl
 
         if (GridMode == GridMode.Beat)
         {
+            // 検出済みビートマップがあれば、その拍時刻を描く（BPMグリッドの代わり）。
+            // 検出拍はオンセットに寄せてあるため、わずかなテンポの揺れもそのまま表示される。
+            if (DetectedBeatMap is { BeatTimes.Count: > 0 } detected)
+            {
+                var lastLabelX = -1000f;
+                for (var i = 0; i < detected.BeatTimes.Count; i++)
+                {
+                    var t = detected.BeatTimes[i];
+                    if (t > duration)
+                        break;
+                    var x = (float)(t * PixelsPerSecond);
+                    if (x > width)
+                        break;
+                    var isBar = BeatGridCalculator.IsBarStart(i);
+                    canvas.DrawLine(x, 0, x, HeaderHeight, isBar ? majorPaint : minorPaint);
+                    var bar = i / 4 + 1;
+                    var beat = i % 4 + 1;
+                    if (isBar)
+                    {
+                        // 小節先頭は「小節.拍」形式で描く（例：1.1、2.1）。
+                        // ラベルが重ならない間隔があるときだけ描く
+                        if (x - lastLabelX >= 56)
+                        {
+                            canvas.DrawText($"{bar}.1", x + 3, 16, textPaint);
+                            lastLabelX = x;
+                        }
+                    }
+                    else if (PixelsPerSecond >= 50)
+                    {
+                        // 拡大時だけ拍番号を「小節.拍」形式で小さく描く（例：1.2）
+                        canvas.DrawText($"{bar}.{beat}", x + 3, 16, beatPaint);
+                    }
+                }
+                return;
+            }
+
             // 毎フレーム List を確保しないよう、拍時刻は等間隔の計算で回す。
             // i は拍番号（0始まり）で、リスト版と一致する。
             var interval = BeatGridCalculator.BeatIntervalSeconds(Project.Bpm);
@@ -379,6 +469,7 @@ public partial class TimelineControl : UserControl
     {
         var pos = e.GetPosition(TimelineElement);
         TimelineElement.CaptureMouse();
+        _editSnapshotTaken = false;
 
         if (pos.Y < HeaderHeight)
         {
@@ -424,14 +515,28 @@ public partial class TimelineControl : UserControl
         if (_dragMode == DragMode.None || _dragClip is null || Project is null)
             return;
 
+        // 実際に動き始めたときだけ1回、アンドゥ用の合図を出す。
+        // クリックだけ（動かない場合）ではスナップショットを積まない。
+        if (!_editSnapshotTaken)
+        {
+            _editSnapshotTaken = true;
+            EditStarted?.Invoke(this, EventArgs.Empty);
+        }
+
         var pos = e.GetPosition(TimelineElement);
         if (_dragMode == DragMode.Move)
         {
             var newStart = (pos.X - _dragOffsetX) / PixelsPerSecond;
             if (SnapBox.IsChecked == true && GridMode == GridMode.Beat)
             {
-                var snapped = BeatGridCalculator.SnapToBeat(
-                    newStart, Project.Bpm, Project.BeatOffsetSeconds);
+                // 検出ビートマップがあるときは検出拍にスナップする（BPMグリッドでは
+                // 検出拍から最大で拍の25%ずれるため）。無ければ BPM グリッドにスナップする。
+                double? snapped;
+                if (DetectedBeatMap is { BeatTimes.Count: > 0 } detected)
+                    snapped = BeatGridCalculator.SnapToBeatTimes(newStart, detected.BeatTimes);
+                else
+                    snapped = BeatGridCalculator.SnapToBeat(
+                        newStart, Project.Bpm, Project.BeatOffsetSeconds);
                 if (snapped.HasValue)
                     newStart = snapped.Value;
             }
@@ -459,6 +564,7 @@ public partial class TimelineControl : UserControl
             TimelineChanged?.Invoke(this, EventArgs.Empty);
         _dragMode = DragMode.None;
         _dragClip = null;
+        _editSnapshotTaken = false;
         TimelineElement.ReleaseMouseCapture();
         InvalidateTimeline();
         if (wasSeek)

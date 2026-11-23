@@ -25,6 +25,11 @@ public static class TimelineEditor
         second.InPointSeconds = clip.InPointSeconds + offset;
         second.DurationSeconds = clip.EndSeconds - timeSeconds;
 
+        // 分割で生まれる後半は元のクリップの途中からの続き。
+        // 開始側トランジションは元の境界に付くものなので、後半には付けない。
+        second.TransitionKind = TransitionKind.None;
+        second.TransitionDurationSeconds = 1.0;
+
         // 後半クリップのキーフレームは分割位置を0として振り直す。
         foreach (var kt in second.KeyframeTracks)
         {
@@ -68,6 +73,59 @@ public static class TimelineEditor
     public static void MoveClip(Clip clip, double newStartSeconds)
     {
         clip.StartSeconds = Math.Max(0, newStartSeconds);
+    }
+
+    /// <summary>
+    /// クリップ内の無音区間（タイムライン時刻）を切り取り、後ろを詰める。
+    /// 無音区間ごとに前後で分割し、無音部分を削除して後ろのクリップを前に詰める（リップル削除）。
+    /// segments はタイムライン時刻で、昇順の想定。範囲外・空の区間は無視する。
+    /// 後ろの区間から処理するため、前の区間の時刻はずれない。
+    /// 戻り値は切り取った区間の数。
+    /// </summary>
+    public static int CutSilenceRanges(
+        Track track, Clip clip, IReadOnlyList<(double StartSeconds, double EndSeconds)> segments)
+    {
+        if (!track.Clips.Contains(clip))
+            throw new ArgumentException("指定されたクリップはこのトラックにありません。", nameof(clip));
+
+        var removed = 0;
+        foreach (var (start, end) in segments.OrderByDescending(s => s.StartSeconds))
+        {
+            // クリップ自体が先の処理で消えていたら（先頭からの無音区間の切り取り）、終わり。
+            if (!track.Clips.Contains(clip))
+                break;
+            if (end <= clip.StartSeconds || start >= clip.EndSeconds || end - start <= 1e-6)
+                continue;
+            var cutStart = Math.Max(start, clip.StartSeconds);
+            var cutEnd = Math.Min(end, clip.EndSeconds);
+            if (cutEnd - cutStart <= 1e-6)
+                continue;
+
+            Clip silencePiece;
+            if (cutEnd < clip.EndSeconds - 1e-9)
+            {
+                // 無音区間の終わりで分割する。後半は無音区間の後ろの残り。
+                // （SplitClip は clip を左側に短くする。）
+                SplitClip(track, clip, cutEnd);
+            }
+            if (cutStart > clip.StartSeconds + 1e-9)
+            {
+                // 無音区間の始まりで分割する。返された後半が無音部分。
+                var middle = SplitClip(track, clip, cutStart);
+                if (middle is null)
+                    continue;
+                silencePiece = middle;
+            }
+            else
+            {
+                // 無音区間がクリップ先頭から始まる。clip 自身が無音部分。
+                silencePiece = clip;
+            }
+
+            RippleDeleteClip(track, silencePiece);
+            removed++;
+        }
+        return removed;
     }
 
     /// <summary>

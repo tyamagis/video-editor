@@ -22,6 +22,18 @@ public static class ProjectStore
         File.WriteAllText(path, json);
     }
 
+    /// <summary>プロジェクトを JSON 文字列にする（アンドゥ用スナップショット）。</summary>
+    public static string Serialize(EditorProject project)
+    {
+        project.Version = EditorProject.CurrentVersion;
+        return JsonSerializer.Serialize(project, Options);
+    }
+
+    /// <summary>JSON 文字列からプロジェクトを復元する（アンドゥ用）。同じ版で作られたものだけを扱う。</summary>
+    public static EditorProject Deserialize(string json)
+        => JsonSerializer.Deserialize<EditorProject>(json, Options)
+            ?? throw new InvalidDataException("プロジェクトを復元できませんでした。");
+
     public static EditorProject Load(string path)
     {
         var json = File.ReadAllText(path);

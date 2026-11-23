@@ -9,6 +9,9 @@ namespace Editor.Core;
 public sealed class EvaluatedClipState
 {
     public required Clip Clip { get; init; }
+
+    /// <summary>評価した時刻（秒）。スライス・ワープなど時刻依存のエフェクトの乱数種に使う。</summary>
+    public double TimeSeconds { get; init; }
     public double Opacity { get; init; } = 1.0;
     public double Scale { get; init; } = 1.0;
     public double RotationDegrees { get; init; }
@@ -16,39 +19,161 @@ public sealed class EvaluatedClipState
     public double PositionY { get; init; }
     public double Brightness { get; init; }
     public double Contrast { get; init; } = 1.0;
+
+    /// <summary>ブレンドモード（クリップの固定値）。</summary>
+    public BlendMode BlendMode { get; init; } = BlendMode.Normal;
+
+    /// <summary>クリップに付いているエフェクト（固定値の一覧）。</summary>
+    public IReadOnlyList<ClipEffect> Effects { get; init; } = Array.Empty<ClipEffect>();
 }
 
 /// <summary>キーフレームと固定プロパティから時刻 t の状態を計算する。</summary>
 public static class TimelineEvaluator
 {
-    /// <summary>クリップ1つの、時刻 t における状態を計算する。</summary>
-    public static EvaluatedClipState EvaluateClip(Clip clip, double timeSeconds)
+    /// <summary>クリップ1つの、時刻 t における状態を計算する。transitionOpacity はトランジションによる不透明度の倍率（1.0 が通常）。audio があれば周波数帯駆動バインドも適用する。</summary>
+    public static EvaluatedClipState EvaluateClip(
+        Clip clip, double timeSeconds, double transitionOpacity = 1.0,
+        EditorProject? project = null, IAudioBandEnergyProvider? audio = null)
     {
         var local = timeSeconds - clip.StartSeconds;
+        var opacity = EvaluateBoundParameter(project, clip, "Opacity", timeSeconds, 1.0, audio) * transitionOpacity;
         return new EvaluatedClipState
         {
             Clip = clip,
-            Opacity = clip.EvaluateParameter("Opacity", local, 1.0),
-            Scale = clip.EvaluateParameter("Scale", local, 1.0),
-            RotationDegrees = clip.EvaluateParameter("Rotation", local, 0.0),
-            PositionX = clip.EvaluateParameter("PositionX", local, 0.0),
-            PositionY = clip.EvaluateParameter("PositionY", local, 0.0),
+            TimeSeconds = timeSeconds,
+            Opacity = Math.Clamp(opacity, 0, 1.0),
+            Scale = EvaluateBoundParameter(project, clip, "Scale", timeSeconds, 1.0, audio),
+            RotationDegrees = EvaluateBoundParameter(project, clip, "Rotation", timeSeconds, 0.0, audio),
+            PositionX = EvaluateBoundParameter(project, clip, "PositionX", timeSeconds, 0.0, audio),
+            PositionY = EvaluateBoundParameter(project, clip, "PositionY", timeSeconds, 0.0, audio),
             Brightness = clip.Brightness,
-            Contrast = clip.Contrast
+            Contrast = clip.Contrast,
+            BlendMode = clip.BlendMode,
+            Effects = clip.Effects
         };
     }
 
-    /// <summary>時刻 t で有効な全クリップの状態を返す。下のトラックから順に並ぶ。</summary>
-    public static List<EvaluatedClipState> EvaluateProject(EditorProject project, double timeSeconds)
+    /// <summary>
+    /// パラメータ1つの時刻 t における値。まずキーフレームで基本値を求め、
+    /// そのパラメータの有効なバインドがあれば帯域エネルギーで動かす。
+    /// 音源クリップが見つからない・解析されていない・その時刻に流れていない場合は
+    /// バインドは無視され、キーフレーム値のままになる。
+    /// </summary>
+    private static double EvaluateBoundParameter(
+        EditorProject? project, Clip clip, string parameterName,
+        double timeSeconds, double defaultValue, IAudioBandEnergyProvider? audio)
+    {
+        var local = timeSeconds - clip.StartSeconds;
+        var value = clip.EvaluateParameter(parameterName, local, defaultValue);
+        if (audio is null || project is null || clip.AudioBindings.Count == 0)
+            return value;
+
+        foreach (var binding in clip.AudioBindings)
+        {
+            if (!binding.Enabled || binding.ParameterName != parameterName)
+                continue;
+            if (string.IsNullOrEmpty(binding.SourceClipId))
+                continue;
+            var source = project.Tracks
+                .SelectMany(t => t.Clips)
+                .FirstOrDefault(c => c.Id == binding.SourceClipId);
+            if (source is null || string.IsNullOrEmpty(source.SourcePath))
+                continue;
+            // タイムライン時刻を音源クリップの素材内時刻へ変換する。
+            var sourceTime = source.InPointSeconds + (timeSeconds - source.StartSeconds);
+            if (sourceTime < source.InPointSeconds - 1e-6
+                || sourceTime > source.InPointSeconds + source.DurationSeconds + 1e-6)
+                continue; // 音源がその時刻に流れていない。
+            var energy = audio.GetBandEnergy(source.Id, sourceTime, binding.LowHz, binding.HighHz);
+            value = binding.CombineWith(value, binding.MapValue(energy));
+        }
+        return value;
+    }
+
+    /// <summary>時刻 t で有効な全クリップの状態を返す。下のトラックから順に並ぶ。audio があればバインドも評価する。</summary>
+    public static List<EvaluatedClipState> EvaluateProject(
+        EditorProject project, double timeSeconds, IAudioBandEnergyProvider? audio = null)
     {
         var result = new List<EvaluatedClipState>();
         foreach (var track in project.Tracks)
         {
             if (!track.IsVisible)
                 continue;
-            foreach (var clip in track.Clips.Where(c => c.IsActiveAt(timeSeconds)))
-                result.Add(EvaluateClip(clip, timeSeconds));
+            var clips = track.Clips.OrderBy(c => c.StartSeconds).ToList();
+            for (var i = 0; i < clips.Count; i++)
+            {
+                var clip = clips[i];
+                var factor = GetTransitionFactor(clips, i, timeSeconds);
+                // クリップが有効な時刻か、トランジション区間に入っているときだけ描く。
+                // （factor は区間外では 1.0 になるので、factor > 0 では全クリップが
+                // 常に含まれてしまい、範囲外のクリップまで描かれてしまう。）
+                if (clip.IsActiveAt(timeSeconds) || IsInTransitionZone(clips, i, timeSeconds))
+                    result.Add(EvaluateClip(clip, timeSeconds, factor, project, audio));
+            }
         }
         return result;
+    }
+
+    /// <summary>
+    /// クリップのトランジションによる不透明度の倍率を返す（1.0 が通常）。
+    /// 開始側にディゾルブがあるクリップは、境界を中心に前後 D/2 ずつの区間でフェードインする。
+    /// 前のクリップは減光しない：不透明度で重ねる描画では、前のクリップを薄くすると
+    /// 2枚の合成が暗く沈むため、前のクリップはそのまま描き、後のクリップが上から
+    /// かぶさっていく形でクロスフェードにする。
+    /// </summary>
+    private static double GetTransitionFactor(IReadOnlyList<Clip> clips, int index, double timeSeconds)
+    {
+        var clip = clips[index];
+        if (clip.TransitionKind == TransitionKind.Dissolve && index > 0)
+        {
+            var duration = GetEffectiveTransitionDuration(clips[index - 1], clip);
+            if (duration > 0)
+            {
+                var zoneStart = clip.StartSeconds - duration / 2;
+                var zoneEnd = clip.StartSeconds + duration / 2;
+                if (timeSeconds >= zoneStart && timeSeconds <= zoneEnd)
+                    return Math.Clamp((timeSeconds - zoneStart) / duration, 0, 1);
+            }
+        }
+        return 1.0;
+    }
+
+    /// <summary>クリップがトランジション区間に入っているか（開始側のフェードイン区間、または次のクリップへのフェードアウト区間）。</summary>
+    private static bool IsInTransitionZone(IReadOnlyList<Clip> clips, int index, double timeSeconds)
+    {
+        var clip = clips[index];
+        if (clip.TransitionKind == TransitionKind.Dissolve && index > 0)
+        {
+            var duration = GetEffectiveTransitionDuration(clips[index - 1], clip);
+            if (duration > 0
+                && timeSeconds >= clip.StartSeconds - duration / 2
+                && timeSeconds <= clip.StartSeconds + duration / 2)
+                return true;
+        }
+        if (index + 1 < clips.Count && clips[index + 1].TransitionKind == TransitionKind.Dissolve)
+        {
+            var next = clips[index + 1];
+            var duration = GetEffectiveTransitionDuration(clip, next);
+            if (duration > 0
+                && timeSeconds >= next.StartSeconds - duration / 2
+                && timeSeconds <= next.StartSeconds + duration / 2)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 隣り合う2クリップ間のトランジションの実効長さ（秒）。
+    /// 隣り合っていない（隙間がある・重なっている）場合は 0。
+    /// 区間がクリップからはみ出さないよう、両クリップの長さの2倍までに丸める。
+    /// </summary>
+    public static double GetEffectiveTransitionDuration(Clip prev, Clip next)
+    {
+        if (Math.Abs(prev.EndSeconds - next.StartSeconds) > 1e-6)
+            return 0; // 隣り合っていない。
+        var duration = next.TransitionDurationSeconds;
+        if (duration <= 0)
+            return 0;
+        return Math.Min(duration, Math.Min(prev.DurationSeconds, next.DurationSeconds) * 2);
     }
 }

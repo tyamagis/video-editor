@@ -29,15 +29,17 @@ public partial class App : Application
         var thumbnailService = new ThumbnailService(ffmpegSettings);
         var exportService = new ExportService(ffmpegSettings);
         var waveformReader = new WaveformReader();
+        var beatAnalyzer = new AudioBeatAnalyzer();
+        var bandProvider = new AudioBandEnergyProvider();
         _streamingFrameSource = new StreamingFrameSource(ffmpegSettings, mediaProbe);
 
-        IFrameRenderer frameRenderer = new TimelineFrameRenderer(thumbnailService, _streamingFrameSource);
+        IFrameRenderer frameRenderer = new TimelineFrameRenderer(thumbnailService, _streamingFrameSource, bandProvider);
         var previewRenderer = new PreviewRenderer(frameRenderer);
         ITimelineExporter timelineExporter = new FrameSequenceExporter(frameRenderer, ffmpegSettings, mediaProbe);
 
         var viewModel = new MainViewModel(
             mediaProbe, thumbnailService, exportService, waveformReader,
-            previewRenderer, timelineExporter, ffmpegSettings);
+            previewRenderer, timelineExporter, ffmpegSettings, beatAnalyzer, bandProvider);
 
         var window = new MainWindow
         {

@@ -29,6 +29,135 @@ public enum ClipKind
     Text
 }
 
+/// <summary>クリップ境界のトランジション種別。開始側（前のクリップとの境界）に付ける。</summary>
+public enum TransitionKind
+{
+    None,
+    Dissolve
+}
+
+/// <summary>クリップのブレンドモード（上のトラックのクリップが下とどう合成されるか）。</summary>
+public enum BlendMode
+{
+    Normal,
+    Add,
+    Screen,
+    Multiply,
+    Overlay
+}
+
+/// <summary>クリップに付けるエフェクトの種類。</summary>
+public enum EffectKind
+{
+    Blur,
+    Glow,
+    RgbShift,
+    Slice,
+    Warp,
+    ChromaKey
+}
+
+/// <summary>
+/// クリップに付けるエフェクト1つ。パラメータは固定値（キーフレーム化は後段で）。
+/// パラメータの意味は種類ごとに決まる。
+/// <list type="bullet">
+/// <item>Blur：Amount = ぼかし半径（px、0〜100）。Radius・KeyColorHex は使わない。</item>
+/// <item>Glow：Amount = 強さ（0〜1）、Radius = ぼかし半径（px、1〜100）。</item>
+/// <item>RgbShift：Amount = チャンネルのずれ（px、0〜50）。</item>
+/// <item>Slice：Amount = スライスのずれ幅（px、0〜100）。</item>
+/// <item>Warp：Amount = 波の振幅（px、0〜100）、Radius = 波長（px、20〜1000）。</item>
+/// <item>ChromaKey：Amount = しきい値（0〜1）、Radius = なめらかさ（0〜1）、KeyColorHex = 抜く色。</item>
+/// </list>
+/// </summary>
+public sealed class ClipEffect
+{
+    public EffectKind Kind { get; set; }
+    public double Amount { get; set; }
+    public double Radius { get; set; }
+    public string KeyColorHex { get; set; } = "#00FF00";
+
+    public ClipEffect Clone() => (ClipEffect)MemberwiseClone();
+}
+
+/// <summary>バインドの合成方法（キーフレーム値と音連動値の合成）。</summary>
+public enum AudioBindCombine
+{
+    /// <summary>キーフレーム値に音連動値の変化分を加算する（無音時はキーフレーム値のまま）。</summary>
+    Add,
+    /// <summary>キーフレーム値に音連動値を掛ける（出力範囲が倍率として働く）。</summary>
+    Multiply,
+    /// <summary>キーフレーム値を音連動値で置き換える。</summary>
+    Override
+}
+
+/// <summary>
+/// 周波数帯駆動バインド1つ。指定した音声クリップの指定周波数帯の音量で、
+/// このクリップの数値パラメータを動かす（設計プラン 4章・フェーズ2）。
+/// 例：20-80Hz の音量で拡大率を 1.00〜1.12 の範囲で動かす。
+/// </summary>
+public sealed class AudioBinding
+{
+    /// <summary>動かすパラメータ。"Opacity" / "Scale" / "Rotation" / "PositionX" / "PositionY"。</summary>
+    public string ParameterName { get; set; } = "Scale";
+
+    /// <summary>音源にするクリップの Id（プロジェクト内の音声つきクリップ）。</summary>
+    public string SourceClipId { get; set; } = string.Empty;
+
+    /// <summary>周波数帯の下限（Hz）。例：20。</summary>
+    public double LowHz { get; set; } = 20;
+
+    /// <summary>周波数帯の上限（Hz）。例：80。</summary>
+    public double HighHz { get; set; } = 80;
+
+    /// <summary>帯域エネルギー 0.0 のときの出力値。</summary>
+    public double MinValue { get; set; } = 1.0;
+
+    /// <summary>帯域エネルギー 1.0 のときの出力値。</summary>
+    public double MaxValue { get; set; } = 1.12;
+
+    /// <summary>感度。帯域エネルギーに掛ける倍率（0〜10）。1 が等倍。</summary>
+    public double Gain { get; set; } = 1.0;
+
+    /// <summary>しきい値。これ以下の帯域エネルギーは 0 とみなす（0〜1）。</summary>
+    public double Threshold { get; set; } = 0.0;
+
+    /// <summary>反転する（音が大きいほど出力が小さくなる）。</summary>
+    public bool Invert { get; set; }
+
+    /// <summary>キーフレーム値との合成方法。</summary>
+    public AudioBindCombine Combine { get; set; } = AudioBindCombine.Add;
+
+    /// <summary>有効か。無効なバインドは無視される。</summary>
+    public bool Enabled { get; set; } = true;
+
+    public AudioBinding Clone() => (AudioBinding)MemberwiseClone();
+
+    /// <summary>
+    /// 帯域エネルギー（0.0〜1.0）から出力値を計算する。
+    /// しきい値・ゲイン・反転を適用してから Min〜Max へ線形写像する。
+    /// </summary>
+    public double MapValue(double bandEnergy)
+    {
+        var x = Math.Clamp(bandEnergy, 0, 1);
+        if (x < Threshold)
+            x = 0;
+        else if (Threshold > 0)
+            x = (x - Threshold) / (1 - Threshold);
+        x = Math.Clamp(x * Gain, 0, 1);
+        if (Invert)
+            x = 1 - x;
+        return MinValue + (MaxValue - MinValue) * x;
+    }
+
+    /// <summary>バインドの出力値をキーフレーム値と合成する。</summary>
+    public double CombineWith(double keyframeValue, double mappedValue) => Combine switch
+    {
+        AudioBindCombine.Override => mappedValue,
+        AudioBindCombine.Multiply => keyframeValue * mappedValue,
+        _ => keyframeValue + (mappedValue - MinValue) // Add：範囲の下限からの変化分だけ加算する。
+    };
+}
+
 /// <summary>キーフレーム間の補間方法。</summary>
 public enum Interpolation
 {
@@ -121,6 +250,12 @@ public sealed class Clip
     /// <summary>素材内での開始位置（イン点、秒）。トリミングで変わる。</summary>
     public double InPointSeconds { get; set; }
 
+    /// <summary>開始側のトランジション種別（前のクリップとの境界）。既定はなし。</summary>
+    public TransitionKind TransitionKind { get; set; } = TransitionKind.None;
+
+    /// <summary>開始側トランジションの長さ（秒）。境界を中心に前後半分ずつ広がる。既定 1.0 秒。</summary>
+    public double TransitionDurationSeconds { get; set; } = 1.0;
+
     // --- テキストクリップ用 ---
     public string Text { get; set; } = string.Empty;
     public string FontFamily { get; set; } = "Yu Gothic UI";
@@ -130,6 +265,21 @@ public sealed class Clip
     // --- 色調補正（フェーズ1：キーフレームなしの固定値。キーフレーム化は後段で） ---
     public double Brightness { get; set; } // -1.0 .. 1.0
     public double Contrast { get; set; } = 1.0; // 0.0 .. 2.0
+
+    /// <summary>ブレンドモード（上のトラックのクリップが下とどう合成されるか）。既定は通常。</summary>
+    public BlendMode BlendMode { get; set; } = BlendMode.Normal;
+
+    /// <summary>クリップに付けるエフェクトの一覧（固定値。キーフレーム化と音連動は後段で）。</summary>
+    public List<ClipEffect> Effects { get; set; } = new();
+
+    /// <summary>周波数帯駆動バインドの一覧。音声クリップの帯域エネルギーで数値パラメータを動かす（フェーズ2）。</summary>
+    public List<AudioBinding> AudioBindings { get; set; } = new();
+
+    /// <summary>ノイズ除去を書き出し時に適用するか（フェーズ3）。プレビューでは反映されない。</summary>
+    public bool NoiseReductionEnabled { get; set; }
+
+    /// <summary>ノイズ除去の強さ（0.0〜1.0）。書き出し時の afftdn の nr（dB）に写す。既定 0.5。</summary>
+    public double NoiseReductionStrength { get; set; } = 0.5;
 
     public List<KeyframeTrack> KeyframeTracks { get; set; } = new();
 
@@ -155,11 +305,13 @@ public sealed class Clip
         return track?.Evaluate(localTimeSeconds, defaultValue) ?? defaultValue;
     }
 
-    /// <summary>分割用に複製する。キーフレームは新しいIdでコピーされる。</summary>
+    /// <summary>分割用に複製する。キーフレームは新しいIdでコピーされる。エフェクトもコピーする（固定値なので分割位置での調整は不要）。</summary>
     public Clip Clone()
     {
         var copy = (Clip)MemberwiseClone();
         copy.Id = Guid.NewGuid().ToString("N");
+        copy.Effects = Effects.Select(e => e.Clone()).ToList();
+        copy.AudioBindings = AudioBindings.Select(b => b.Clone()).ToList();
         copy.KeyframeTracks = KeyframeTracks
             .Select(t => new KeyframeTrack
             {

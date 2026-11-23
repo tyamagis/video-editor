@@ -1,8 +1,10 @@
 // プレビュー用フレームのストリーミング取得。
 // 従来は1フレームごとに ffmpeg プロセスを起動していたため、
 // 30fps 再生で毎秒30回プロセスを立ち上げて重かった。
-// ここでは ffmpeg を1プロセスだけ常駐させ、rawvideo をパイプで
+// ここでは ffmpeg を常駐させ、rawvideo をパイプで
 // 連続デコードして必要な時刻のフレームを渡す。シーク時のみ張り直す。
+// トランジション区間では2つの素材を交互に読むため、セッションは
+// 素材ごとに最大2つまで保持する（3つめが要るときは最も古く使ったものを捨てる）。
 // 取得に失敗した場合は呼び出し側が単発抽出（ThumbnailService）に
 // フォールバックするので、プレビューが真っ黒になることはない。
 
@@ -33,7 +35,15 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
     private readonly MediaProbe _probe;
     private readonly Dictionary<string, MediaInfo> _probeCache = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private Session? _session;
+
+    /// <summary>同時に保持する ffmpeg セッションの上限。トランジションで2素材を交互に読むため 2。</summary>
+    private const int MaxSessions = 2;
+
+    /// <summary>素材（パス＋横幅）ごとの常駐セッション。</summary>
+    private readonly Dictionary<(string SourcePath, int MaxWidth), Session> _sessions = new();
+
+    /// <summary>セッションの使用順（末尾が直近で使ったもの）。3つめが要るとき先頭を捨てる。</summary>
+    private readonly List<(string SourcePath, int MaxWidth)> _sessionOrder = new();
     private bool _disposed;
 
     /// <summary>ハードウェアデコードが使えない環境と分かったら true（以後ソフトウェアで動く）。</summary>
@@ -52,6 +62,8 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         if (timeSeconds < 0)
             timeSeconds = 0;
 
+        var key = (sourcePath, maxWidth);
+
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -63,11 +75,12 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
             var outHeight = Math.Max(2, (int)Math.Round(info.Height * (double)maxWidth / info.Width));
             var frameBytes = maxWidth * outHeight * 4;
 
-            if (!CanServe(sourcePath, maxWidth, timeSeconds))
-                await StartSessionAsync(sourcePath, timeSeconds, maxWidth, outHeight, frameBytes, ct)
+            if (!_sessions.TryGetValue(key, out var session) || !CanServe(session, timeSeconds))
+                session = await StartSessionAsync(sourcePath, timeSeconds, maxWidth, outHeight, frameBytes, ct)
                     .ConfigureAwait(false);
+            else
+                TouchSession(key); // 使えたので直近使用として記録する。
 
-            var session = _session!;
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
@@ -79,9 +92,8 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
                     if (session.NextIndex == 0 && session.Hwaccel && !_hwaccelDisabled)
                     {
                         _hwaccelDisabled = true;
-                        await StartSessionAsync(sourcePath, timeSeconds, maxWidth, outHeight, frameBytes, ct)
+                        session = await StartSessionAsync(sourcePath, timeSeconds, maxWidth, outHeight, frameBytes, ct)
                             .ConfigureAwait(false);
-                        session = _session!;
                         continue;
                     }
                     session.Ended = true;
@@ -98,8 +110,8 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         }
         catch (OperationCanceledException)
         {
-            // 途中キャンセルはフレーム境界が崩れるのでセッションを捨てる。
-            DisposeSession();
+            // 途中キャンセルはフレーム境界が崩れるのでその素材のセッションを捨てる。
+            DisposeSession(key);
             throw;
         }
         finally
@@ -108,15 +120,12 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         }
     }
 
-    /// <summary>現在のセッションで timeSeconds を出せるか。</summary>
-    private bool CanServe(string sourcePath, int maxWidth, double timeSeconds)
+    /// <summary>そのセッションで timeSeconds を出せるか。</summary>
+    private bool CanServe(Session s, double timeSeconds)
     {
-        var s = _session;
-        if (s is null || s.Ended)
+        if (s.Ended)
             return false;
         if (HasExitedQuietly(s.Process))
-            return false;
-        if (s.SourcePath != sourcePath || s.MaxWidth != maxWidth)
             return false;
         if (timeSeconds < s.StartSeconds - 1e-6)
             return false; // 巻き戻しは張り直す。
@@ -125,11 +134,25 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         return true;
     }
 
-    private async Task StartSessionAsync(
+    /// <summary>そのキーを直近で使ったものとして記録する（古い順の先頭から捨てるため）。</summary>
+    private void TouchSession((string SourcePath, int MaxWidth) key)
+    {
+        _sessionOrder.Remove(key);
+        _sessionOrder.Add(key);
+    }
+
+    private async Task<Session> StartSessionAsync(
         string sourcePath, double startSeconds, int maxWidth, int outHeight, int frameBytes,
         CancellationToken ct)
     {
-        DisposeSession();
+        var key = (sourcePath, maxWidth);
+
+        // 同じ素材の古いセッションがあれば捨てる。
+        DisposeSession(key);
+
+        // 上限を超えるときは最も古く使ったセッションを捨てる。
+        while (_sessions.Count >= MaxSessions)
+            DisposeSession(_sessionOrder[0]);
 
         // ハードウェアデコード（GPU）が使えればデコードを GPU に逃がす。
         // 使えない環境では起動直後にフレームが出ないので、呼び出し側で
@@ -161,7 +184,7 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         // stderr を読み捨てないとパイプが詰まって ffmpeg が止まる。失敗は無視する。
         _ = DrainStderrAsync(process.StandardError);
 
-        _session = new Session
+        var session = new Session
         {
             SourcePath = sourcePath,
             MaxWidth = maxWidth,
@@ -174,7 +197,10 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
             Stream = process.StandardOutput.BaseStream,
             LastTime = startSeconds
         };
+        _sessions[key] = session;
+        _sessionOrder.Add(key);
         await Task.CompletedTask.ConfigureAwait(false);
+        return session;
     }
 
     /// <summary>ストリームから1フレーム分だけ読む。終端なら null。</summary>
@@ -208,12 +234,19 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         }
     }
 
-    private void DisposeSession()
+    /// <summary>そのキーのセッションを捨てる（無ければ何もしない）。</summary>
+    private void DisposeSession((string SourcePath, int MaxWidth) key)
     {
-        var s = _session;
-        _session = null;
-        if (s is null)
+        if (!_sessions.TryGetValue(key, out var s))
             return;
+        _sessions.Remove(key);
+        _sessionOrder.Remove(key);
+        KillSession(s);
+    }
+
+    /// <summary>ffmpeg プロセスを終了して破棄する。</summary>
+    private static void KillSession(Session s)
+    {
         try
         {
             // Kill(entireProcessTree: true) は子プロセスを探すために全プロセスを
@@ -267,7 +300,8 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         if (_disposed)
             return;
         _disposed = true;
-        DisposeSession();
+        foreach (var key in _sessionOrder.ToList())
+            DisposeSession(key);
         _gate.Dispose();
     }
 

@@ -45,9 +45,13 @@ public partial class MainWindow : Window
         };
         TimelineControl.ClipSelected += (_, clip) => _viewModel.SelectedClip = clip;
         TimelineControl.SplitRequested += (_, _) => _viewModel.SplitAtPlayhead();
+        TimelineControl.EditStarted += (_, _) => _viewModel.BeginEdit();
         TimelineControl.TimelineChanged += (_, _) => _viewModel.NotifyTimelineChanged();
         TimelineControl.GridModeChanged += (_, _) => _viewModel.GridMode = TimelineControl.GridMode;
         TimelineControl.ShowWaveformChanged += (_, _) => _viewModel.ShowWaveform = TimelineControl.ShowWaveform;
+
+        PreviewControl.SpectrumBandsProvider = () => _viewModel.GetSpectrumBands();
+        PreviewControl.StereoWindowProvider = () => _viewModel.GetStereoWindow();
 
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
         _viewModel.PreviewInvalidated += async (_, _) => await UpdatePreviewAsync().ConfigureAwait(true);
@@ -78,6 +82,21 @@ public partial class MainWindow : Window
         else if (e.PropertyName == nameof(MainViewModel.GridMode))
         {
             TimelineControl.GridMode = _viewModel.GridMode;
+        }
+        else if (e.PropertyName == nameof(MainViewModel.DetectedBeatMap))
+        {
+            TimelineControl.DetectedBeatMap = _viewModel.DetectedBeatMap;
+            TimelineControl.InvalidateTimeline();
+        }
+        else if (e.PropertyName == nameof(MainViewModel.ShowSpectrum))
+        {
+            PreviewControl.ShowSpectrum = _viewModel.ShowSpectrum;
+            PreviewControl.InvalidatePreview();
+        }
+        else if (e.PropertyName == nameof(MainViewModel.ShowLissajous))
+        {
+            PreviewControl.ShowLissajous = _viewModel.ShowLissajous;
+            PreviewControl.InvalidatePreview();
         }
     }
 
@@ -116,8 +135,8 @@ public partial class MainWindow : Window
 
     private void MainWindow_KeyDown(object sender, KeyEventArgs e)
     {
-        // テキスト入力中・コンボボックス操作中はショートカットを無効化する。
-        if (Keyboard.FocusedElement is TextBox or ComboBox)
+        // テキスト入力中・コンボボックス操作中・チェックボックス操作中はショートカットを無効化する。
+        if (Keyboard.FocusedElement is TextBox or ComboBox or CheckBox)
             return;
         if (e.Key == Key.S)
             _viewModel.SplitAtPlayhead();
@@ -127,14 +146,18 @@ public partial class MainWindow : Window
             _viewModel.SetExportInAtPlayhead();
         else if (e.Key == Key.O)
             _viewModel.SetExportOutAtPlayhead();
+        else if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.Z)
+            _viewModel.Undo();
+        else if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.Y)
+            _viewModel.Redo();
     }
 
-    /// <summary>Space で再生・停止を切り替える。テキスト入力中とコンボボックス操作中は除外する。</summary>
+    /// <summary>Space で再生・停止を切り替える。テキスト入力中とコンボボックス操作中、チェックボックス操作中は除外する。</summary>
     private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (_viewModel is null)
             return;
-        if (e.Key == Key.Space && Keyboard.FocusedElement is not TextBox and not ComboBox)
+        if (e.Key == Key.Space && Keyboard.FocusedElement is not TextBox and not ComboBox and not CheckBox)
         {
             _viewModel.IsPlaying = !_viewModel.IsPlaying;
             e.Handled = true;
@@ -267,6 +290,60 @@ public partial class MainWindow : Window
     private void SplitMenu_Click(object sender, RoutedEventArgs e) => _viewModel.SplitAtPlayhead();
 
     private void DeleteMenu_Click(object sender, RoutedEventArgs e) => _viewModel.DeleteSelectedClip();
+
+    private void UndoMenu_Click(object sender, RoutedEventArgs e) => _viewModel.Undo();
+
+    private void RedoMenu_Click(object sender, RoutedEventArgs e) => _viewModel.Redo();
+
+    private void AddKeyframeButton_Click(object sender, RoutedEventArgs e)
+        => _viewModel.AddKeyframeAtPlayhead();
+
+    private void DeleteKeyframeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: KeyframeRow row })
+            _viewModel.DeleteKeyframe(row);
+    }
+
+    private void AddEffectButton_Click(object sender, RoutedEventArgs e)
+        => _viewModel.AddEffect(_viewModel.NewEffectKind);
+
+    private void DeleteEffectButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: EffectRow row })
+            _viewModel.DeleteEffect(row);
+    }
+
+    private void AddAudioBindingButton_Click(object sender, RoutedEventArgs e)
+        => _viewModel.AddAudioBinding();
+
+    private void DeleteAudioBindingButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: AudioBindingRow row })
+            _viewModel.DeleteAudioBinding(row);
+    }
+
+    /// <summary>
+    /// インスペクタや BPM の入力欄にフォーカスが入ったときに、アンドゥ用の
+    /// スナップショットを取る。入力欄はキー入力のたびに直接モデルを変えるため、
+    /// フォーカス時の一回だけが「1回の編集」になる。
+    /// </summary>
+    private void EditableField_GotFocus(object sender, RoutedEventArgs e) => _viewModel.BeginEdit();
+
+    /// <summary>BPM自動検出を実行する（非同期。検出中はボタンが無効になる）。</summary>
+    private async void DetectBpmButton_Click(object sender, RoutedEventArgs e)
+        => await _viewModel.DetectBpmAsync().ConfigureAwait(true);
+
+    /// <summary>保留中の検出結果をプロジェクトへ反映する。</summary>
+    private void ApplyDetectedBpmButton_Click(object sender, RoutedEventArgs e)
+        => _viewModel.ApplyDetectedBpm();
+
+    /// <summary>選択中クリップの無音区間を検出する（非同期。検出中はボタンが無効になる）。</summary>
+    private async void DetectSilenceButton_Click(object sender, RoutedEventArgs e)
+        => await _viewModel.DetectSilenceAsync().ConfigureAwait(true);
+
+    /// <summary>検出した無音区間を切り取る。</summary>
+    private void ApplySilenceCutButton_Click(object sender, RoutedEventArgs e)
+        => _viewModel.ApplySilenceCut();
 
     private void PreviewResBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {

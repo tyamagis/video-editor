@@ -83,6 +83,26 @@ public static class BeatGridCalculator
         return Math.Abs(nearest - timeSeconds) <= toleranceSeconds ? nearest : null;
     }
 
+    /// <summary>
+    /// 検出した拍時刻の列の中で最も近いものを返す。許容範囲より遠ければ null。
+    /// 検出ビートマップがあるときのスナップに使う（BPMグリッドではなく検出拍に合わせる）。
+    /// </summary>
+    public static double? SnapToBeatTimes(double timeSeconds, IReadOnlyList<double> beatTimes, double toleranceSeconds = 0.05)
+    {
+        double? best = null;
+        var bestDist = double.MaxValue;
+        foreach (var t in beatTimes)
+        {
+            var dist = Math.Abs(t - timeSeconds);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = t;
+            }
+        }
+        return bestDist <= toleranceSeconds ? best : null;
+    }
+
     /// <summary>小節の先頭かどうか（4拍を1小節とする）。小節線を濃く描く判定に使う。</summary>
     public static bool IsBarStart(int beatIndex) => beatIndex >= 0 && beatIndex % 4 == 0;
 }
