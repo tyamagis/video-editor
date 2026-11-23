@@ -9,6 +9,7 @@ using System.Windows.Input;
 using Editor.Audio;
 using Editor.Core;
 using SkiaSharp;
+using SkiaSharp.Views.Desktop;
 using SkiaSharp.Views.WPF;
 
 namespace Editor.App.Controls;

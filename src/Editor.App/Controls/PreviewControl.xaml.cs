@@ -4,6 +4,7 @@
 
 using System.Windows.Controls;
 using SkiaSharp;
+using SkiaSharp.Views.Desktop;
 using SkiaSharp.Views.WPF;
 
 namespace Editor.App.Controls;

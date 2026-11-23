@@ -13,6 +13,8 @@
     <!-- プレビュー表示：SkiaSharp.Views.WPF（SKElement） -->
     <PackageReference Include="SkiaSharp" Version="2.88.9" />
     <PackageReference Include="SkiaSharp.Views.WPF" Version="2.88.9" />
+    <!-- SKPaintSurfaceEventArgs は SkiaSharp.Views.Desktop 名前空間にあるため明示参照 -->
+    <PackageReference Include="SkiaSharp.Views.Desktop" Version="2.88.9" />
   </ItemGroup>
 
   <ItemGroup>
