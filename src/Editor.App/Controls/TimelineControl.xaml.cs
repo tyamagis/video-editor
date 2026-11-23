@@ -76,7 +76,11 @@ public partial class TimelineControl : UserControl
     public event EventHandler? GridModeChanged;
     public event EventHandler? ShowWaveformChanged;
 
-    public void InvalidateTimeline() => TimelineElement.InvalidateVisual();
+    /// <summary>
+    /// 再描画要求。XAML読み込み中は GridModeBox 等のイベントが先に発火し、
+    /// TimelineElement がまだ null の場合があるため、null 条件で呼ぶ。
+    /// </summary>
+    public void InvalidateTimeline() => TimelineElement?.InvalidateVisual();
 
     private void GridModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {

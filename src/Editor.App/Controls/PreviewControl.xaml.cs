@@ -18,7 +18,7 @@ public partial class PreviewControl : UserControl
         InitializeComponent();
     }
 
-    public void InvalidatePreview() => PreviewElement.InvalidateVisual();
+    public void InvalidatePreview() => PreviewElement?.InvalidateVisual();
 
     private void OnPaintSurface(object sender, SKPaintSurfaceEventArgs e)
     {
