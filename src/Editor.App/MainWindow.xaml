@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:Editor.App.Controls"
         Title="VideoEditor — フェーズ1" Width="1280" Height="800"
-        Background="{StaticResource AppBackground}" Foreground="{StaticResource AppForeground}">
+        Background="{StaticResource AppBackground}" Foreground="{StaticResource AppForeground}"
+        PreviewKeyDown="MainWindow_PreviewKeyDown">
   <DockPanel>
     <Menu DockPanel.Dock="Top" Background="{StaticResource PanelBackground}" Foreground="{StaticResource AppForeground}">
       <MenuItem Header="ファイル">

@@ -35,6 +35,7 @@ public partial class MainWindow : Window
         TimelineControl.WaveformProvider = clip => _viewModel.GetWaveform(clip.SourcePath);
 
         TimelineControl.SeekRequested += (_, time) => _viewModel.PlayheadSeconds = time;
+        TimelineControl.SeekDragFinished += (_, _) => _viewModel.RestartAudioIfPlaying();
         TimelineControl.MediaDropped += (_, drop) =>
         {
             var item = _viewModel.MediaItems.FirstOrDefault(m => m.SourcePath == drop.SourcePath);
@@ -106,6 +107,18 @@ public partial class MainWindow : Window
             _viewModel.SplitAtPlayhead();
         else if (e.Key == Key.Delete)
             _viewModel.DeleteSelectedClip();
+    }
+
+    /// <summary>Space で再生・停止を切り替える。テキスト入力中とコンボボックス操作中は除外する。</summary>
+    private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_viewModel is null)
+            return;
+        if (e.Key == Key.Space && Keyboard.FocusedElement is not TextBox and not ComboBox)
+        {
+            _viewModel.IsPlaying = !_viewModel.IsPlaying;
+            e.Handled = true;
+        }
     }
 
     private async void ImportMenu_Click(object sender, RoutedEventArgs e)

@@ -26,7 +26,7 @@ public partial class TimelineControl : UserControl
 
     private readonly Dictionary<Clip, SKRect> _clipRects = new();
 
-    private enum DragMode { None, Move, Trim }
+    private enum DragMode { None, Move, Trim, Seek }
     private DragMode _dragMode = DragMode.None;
     private Clip? _dragClip;
     private double _dragOffsetX;
@@ -86,6 +86,8 @@ public partial class TimelineControl : UserControl
 
     /// <summary>再生ヘッドの移動要求（時刻・秒）。</summary>
     public event EventHandler<double>? SeekRequested;
+    /// <summary>シークのドラッグ（またはクリック）が終わった。音声の再開などに使う。</summary>
+    public event EventHandler? SeekDragFinished;
     /// <summary>クリップがクリックされた。</summary>
     public event EventHandler<Clip>? ClipSelected;
     public event EventHandler? SplitRequested;
@@ -186,19 +188,22 @@ public partial class TimelineControl : UserControl
                     break;
                 var isBar = BeatGridCalculator.IsBarStart(i);
                 canvas.DrawLine(x, 0, x, HeaderHeight, isBar ? majorPaint : minorPaint);
+                var bar = i / 4 + 1;
+                var beat = i % 4 + 1;
                 if (isBar)
                 {
-                    // 小節ラベルは重ならない間隔があるときだけ描く
+                    // 小節先頭は「小節.拍」形式で描く（例：1.1、2.1）。
+                    // ラベルが重ならない間隔があるときだけ描く
                     if (x - lastLabelX >= 56)
                     {
-                        canvas.DrawText($"小節 {i / 4 + 1}", x + 3, 16, textPaint);
+                        canvas.DrawText($"{bar}.1", x + 3, 16, textPaint);
                         lastLabelX = x;
                     }
                 }
                 else if (PixelsPerSecond >= 50)
                 {
-                    // 拡大時だけ拍番号（1〜4）を小さく描く
-                    canvas.DrawText($"{i % 4 + 1}", x + 3, 16, beatPaint);
+                    // 拡大時だけ拍番号を「小節.拍」形式で小さく描く（例：1.2）
+                    canvas.DrawText($"{bar}.{beat}", x + 3, 16, beatPaint);
                 }
             }
             return;
@@ -338,6 +343,7 @@ public partial class TimelineControl : UserControl
 
         if (pos.Y < HeaderHeight)
         {
+            _dragMode = DragMode.Seek;
             SeekRequested?.Invoke(this, pos.X / PixelsPerSecond);
             return;
         }
@@ -362,12 +368,20 @@ public partial class TimelineControl : UserControl
             return;
         }
 
-        // 空き領域のクリックはシーク扱い。
+        // 空き領域はシーク扱い。ドラッグ中は再生ヘッドが追従する。
+        _dragMode = DragMode.Seek;
         SeekRequested?.Invoke(this, pos.X / PixelsPerSecond);
     }
 
     private void OnMouseMove(object sender, MouseEventArgs e)
     {
+        if (_dragMode == DragMode.Seek)
+        {
+            var seekPos = e.GetPosition(TimelineElement);
+            SeekRequested?.Invoke(this, seekPos.X / PixelsPerSecond);
+            return;
+        }
+
         if (_dragMode == DragMode.None || _dragClip is null || Project is null)
             return;
 
@@ -401,11 +415,14 @@ public partial class TimelineControl : UserControl
 
     private void OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        var wasSeek = _dragMode == DragMode.Seek;
         if (_dragMode != DragMode.None)
             TimelineChanged?.Invoke(this, EventArgs.Empty);
         _dragMode = DragMode.None;
         _dragClip = null;
         TimelineElement.ReleaseMouseCapture();
         InvalidateTimeline();
+        if (wasSeek)
+            SeekDragFinished?.Invoke(this, EventArgs.Empty);
     }
 }

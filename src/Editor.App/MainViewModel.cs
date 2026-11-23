@@ -37,6 +37,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly FfmpegSettings _ffmpegSettings;
 
     private readonly DispatcherTimer _playTimer;
+    private readonly AudioPreviewPlayer _audioPlayer = new();
     private EditorProject _project = new();
     private Clip? _selectedClip;
     private MediaItem? _selectedMediaItem;
@@ -125,9 +126,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             _isPlaying = value;
             if (value)
+            {
                 _playTimer.Start();
+                StartAudioAtPlayhead();
+            }
             else
+            {
                 _playTimer.Stop();
+                _audioPlayer.Stop();
+            }
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayPauseLabel));
         }
@@ -290,6 +297,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public void LoadProject(string path)
     {
+        IsPlaying = false;
         Project = ProjectStore.Load(path);
         SelectedClip = null;
         PlayheadSeconds = 0;
@@ -332,6 +340,40 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
         PlayheadSeconds = next;
+    }
+
+    /// <summary>再生ヘッド位置でアクティブな音声つきクリップの音を鳴らす。無ければ止める。</summary>
+    public void StartAudioAtPlayhead()
+    {
+        foreach (var track in Project.Tracks)
+        {
+            foreach (var clip in track.Clips)
+            {
+                if (!clip.IsActiveAt(PlayheadSeconds))
+                    continue;
+                var item = MediaItems.FirstOrDefault(m => m.SourcePath == clip.SourcePath);
+                if (item is null || !item.Info.HasAudio)
+                    continue;
+                var sourceTime = clip.InPointSeconds + (PlayheadSeconds - clip.StartSeconds);
+                try
+                {
+                    _audioPlayer.Play(item.SourcePath, sourceTime);
+                }
+                catch (Exception ex)
+                {
+                    StatusMessage = $"音声の再生に失敗しました：{ex.Message}";
+                }
+                return;
+            }
+        }
+        _audioPlayer.Stop();
+    }
+
+    /// <summary>再生中なら音声を再生ヘッド位置から鳴らし直す（シーク後に呼ぶ）。</summary>
+    public void RestartAudioIfPlaying()
+    {
+        if (IsPlaying)
+            StartAudioAtPlayhead();
     }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null)

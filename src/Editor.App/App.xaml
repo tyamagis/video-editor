@@ -9,5 +9,33 @@
     <SolidColorBrush x:Key="ControlBorder" Color="#3D3D3D" />
     <SolidColorBrush x:Key="AppForeground" Color="#D8D8D8" />
     <SolidColorBrush x:Key="MutedForeground" Color="#9A9A9A" />
+
+    <!-- メニュー：ドロップダウンの中身も暗背景＋明文字にする。
+         既定テーマだとドロップダウン背景が白のまま文字色だけ明るくなり読めなくなる。 -->
+    <Style TargetType="MenuItem">
+      <Setter Property="Background" Value="{StaticResource PanelBackground}" />
+      <Setter Property="Foreground" Value="{StaticResource AppForeground}" />
+      <Setter Property="BorderBrush" Value="{StaticResource ControlBorder}" />
+    </Style>
+
+    <!-- コンボボックス：本体とドロップダウンの項目を暗背景＋明文字にする -->
+    <Style TargetType="ComboBox">
+      <Setter Property="Background" Value="{StaticResource ControlBackground}" />
+      <Setter Property="Foreground" Value="{StaticResource AppForeground}" />
+      <Setter Property="BorderBrush" Value="{StaticResource ControlBorder}" />
+    </Style>
+    <Style TargetType="ComboBoxItem">
+      <Setter Property="Background" Value="{StaticResource ControlBackground}" />
+      <Setter Property="Foreground" Value="{StaticResource AppForeground}" />
+      <Style.Triggers>
+        <Trigger Property="IsHighlighted" Value="True">
+          <Setter Property="Background" Value="#3D3D3D" />
+          <Setter Property="Foreground" Value="#FFFFFF" />
+        </Trigger>
+        <Trigger Property="IsSelected" Value="True">
+          <Setter Property="Background" Value="#3D3D3D" />
+        </Trigger>
+      </Style.Triggers>
+    </Style>
   </Application.Resources>
 </Application>

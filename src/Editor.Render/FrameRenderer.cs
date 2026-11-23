@@ -4,6 +4,7 @@
 // 映像フレームは Editor.Media から取得し、テキストは直接描く。
 
 using System.IO;
+using System.Runtime.InteropServices;
 using Editor.Core;
 using Editor.Media;
 using SkiaSharp;
@@ -22,10 +23,12 @@ public interface IFrameRenderer
 public sealed class TimelineFrameRenderer : IFrameRenderer
 {
     private readonly IVideoFrameSource _frameSource;
+    private readonly IStreamingFrameSource? _streamingSource;
 
-    public TimelineFrameRenderer(IVideoFrameSource frameSource)
+    public TimelineFrameRenderer(IVideoFrameSource frameSource, IStreamingFrameSource? streamingSource = null)
     {
         _frameSource = frameSource;
+        _streamingSource = streamingSource;
     }
 
     public async Task<SKBitmap> RenderFrameAsync(
@@ -72,16 +75,48 @@ public sealed class TimelineFrameRenderer : IFrameRenderer
         // 素材内の時刻 ＝ イン点 ＋ タイムライン上での経過時間。
         var sourceTime = clip.InPointSeconds + timeSeconds - clip.StartSeconds;
 
+        // まず常駐ストリームから取る。失敗したら単発抽出にフォールバックする。
+        if (_streamingSource is not null)
+        {
+            try
+            {
+                var frame = await _streamingSource.GetFrameAsync(clip.SourcePath, sourceTime, width, ct)
+                    .ConfigureAwait(false);
+                if (frame is not null)
+                {
+                    using var streamBitmap = CreateBitmapFromBgra(frame);
+                    DrawBitmapWithTransform(canvas, streamBitmap, state, width, height);
+                }
+                return; // フレーム無し（終端より後）は黒のまま。
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                // フォールバックへ。
+            }
+        }
+
         var png = await _frameSource.GetFramePngAsync(clip.SourcePath, sourceTime, width, ct)
             .ConfigureAwait(false);
         if (png is null)
             return;
 
-        using var frame = SKBitmap.Decode(png);
-        if (frame is null)
+        using var frameBitmap = SKBitmap.Decode(png);
+        if (frameBitmap is null)
             return;
 
-        DrawBitmapWithTransform(canvas, frame, state, width, height);
+        DrawBitmapWithTransform(canvas, frameBitmap, state, width, height);
+    }
+
+    /// <summary>BGRA の生画素を SKBitmap にコピーする。</summary>
+    private static SKBitmap CreateBitmapFromBgra(VideoFrameData frame)
+    {
+        var bitmap = new SKBitmap(new SKImageInfo(frame.Width, frame.Height, SKColorType.Bgra8888, SKAlphaType.Premul));
+        Marshal.Copy(frame.Bgra, 0, bitmap.GetPixels(), frame.Bgra.Length);
+        return bitmap;
     }
 
     private static void DrawImageClip(

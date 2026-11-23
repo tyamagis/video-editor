@@ -10,6 +10,8 @@ namespace Editor.App;
 
 public partial class App : Application
 {
+    private StreamingFrameSource? _streamingFrameSource;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -27,8 +29,9 @@ public partial class App : Application
         var thumbnailService = new ThumbnailService(ffmpegSettings);
         var exportService = new ExportService(ffmpegSettings);
         var waveformReader = new WaveformReader();
+        _streamingFrameSource = new StreamingFrameSource(ffmpegSettings, mediaProbe);
 
-        IFrameRenderer frameRenderer = new TimelineFrameRenderer(thumbnailService);
+        IFrameRenderer frameRenderer = new TimelineFrameRenderer(thumbnailService, _streamingFrameSource);
         var previewRenderer = new PreviewRenderer(frameRenderer);
         ITimelineExporter timelineExporter = new FrameSequenceExporter(frameRenderer, ffmpegSettings);
 
@@ -41,5 +44,11 @@ public partial class App : Application
             DataContext = viewModel
         };
         window.Show();
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _streamingFrameSource?.Dispose();
+        base.OnExit(e);
     }
 }
