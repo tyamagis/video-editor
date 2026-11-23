@@ -20,11 +20,63 @@
       <Setter Property="BorderBrush" Value="{StaticResource ControlBorder}" />
     </Style>
 
-    <!-- コンボボックス：本体とドロップダウンの項目を暗背景＋明文字にする -->
+    <!-- コンボボックス：本体の立体クロームをやめ、フラットで角丸にする。
+         既定テンプレートは Background を無視して白いクロームを描くため、テンプレートごと置き換える。
+         ドロップダウンの項目は下の ComboBoxItem スタイルで暗背景＋明文字にする。 -->
     <Style TargetType="ComboBox">
       <Setter Property="Background" Value="{StaticResource ControlBackground}" />
       <Setter Property="Foreground" Value="{StaticResource AppForeground}" />
       <Setter Property="BorderBrush" Value="{StaticResource ControlBorder}" />
+      <Setter Property="Padding" Value="6,2" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBox">
+            <Grid>
+              <Border x:Name="border" Background="{TemplateBinding Background}"
+                      BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="4">
+                <Grid>
+                  <ContentPresenter x:Name="ContentSite" Margin="{TemplateBinding Padding}"
+                                    Content="{TemplateBinding SelectionBoxItem}"
+                                    ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                    ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                    HorizontalAlignment="Left" VerticalAlignment="Center" />
+                  <ToggleButton x:Name="toggleButton" Focusable="False" ClickMode="Press"
+                                HorizontalAlignment="Right" Width="22"
+                                IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                    <ToggleButton.Template>
+                      <ControlTemplate TargetType="ToggleButton">
+                        <Border Background="Transparent">
+                          <Path Data="M 0 0 L 4 4 L 8 0 Z" Fill="{StaticResource AppForeground}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                      </ControlTemplate>
+                    </ToggleButton.Template>
+                  </ToggleButton>
+                </Grid>
+              </Border>
+              <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}"
+                     Placement="Bottom" Focusable="False" PopupAnimation="Slide">
+                <Border Background="{StaticResource ControlBackground}"
+                        BorderBrush="{StaticResource ControlBorder}" BorderThickness="1" CornerRadius="4"
+                        MinWidth="{TemplateBinding ActualWidth}"
+                        MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                  <ScrollViewer>
+                    <StackPanel IsItemsHost="True" />
+                  </ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="border" Property="BorderBrush" Value="#4A4A4A" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="border" Property="Opacity" Value="0.5" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
     <Style TargetType="ComboBoxItem">
       <Setter Property="Background" Value="{StaticResource ControlBackground}" />
@@ -133,6 +185,137 @@
             <Border Background="{TemplateBinding Background}" Padding="4,2">
               <ToolBarPanel IsItemsHost="True" />
             </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- チェックボックス：白い既定ボックスをやめ、暗い角丸ボックス＋アクセントのチェックにする -->
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="{StaticResource AppForeground}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <StackPanel Orientation="Horizontal">
+              <Border x:Name="box" Width="16" Height="16"
+                      Background="{StaticResource ControlBackground}"
+                      BorderBrush="{StaticResource ControlBorder}" BorderThickness="1" CornerRadius="3">
+                <Path x:Name="check" Data="M 3 8 L 6.5 11.5 L 13 4" Stroke="{StaticResource AccentBrush}"
+                      StrokeThickness="2" Visibility="Collapsed"
+                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Border>
+              <ContentPresenter Margin="6,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="check" Property="Visibility" Value="Visible" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="box" Property="Opacity" Value="0.5" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- スライダー：細いトラック＋丸いつまみにする（横方向のみ） -->
+    <Style x:Key="SliderTrackRepeatButtonStyle" TargetType="RepeatButton">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RepeatButton">
+            <Border Background="Transparent" />
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="Slider">
+      <Setter Property="Background" Value="{StaticResource ControlBorder}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Slider">
+            <Grid>
+              <Border Height="4" Background="{TemplateBinding Background}" CornerRadius="2"
+                      VerticalAlignment="Center" />
+              <Track x:Name="PART_Track">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="Slider.DecreaseLarge" Focusable="False"
+                                Style="{StaticResource SliderTrackRepeatButtonStyle}" />
+                </Track.DecreaseRepeatButton>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="Slider.IncreaseLarge" Focusable="False"
+                                Style="{StaticResource SliderTrackRepeatButtonStyle}" />
+                </Track.IncreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb>
+                    <Thumb.Template>
+                      <ControlTemplate TargetType="Thumb">
+                        <Ellipse Width="14" Height="14" Fill="#5A5A5A"
+                                 Stroke="{StaticResource ControlBorder}" StrokeThickness="1" />
+                      </ControlTemplate>
+                    </Thumb.Template>
+                  </Thumb>
+                </Track.Thumb>
+              </Track>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- スクロールバー：矢印ボタンをなくし、細いフラットなつまみにする -->
+    <Style x:Key="ScrollBarThumbStyle" TargetType="Thumb">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Thumb">
+            <Border Background="#4A4A4A" CornerRadius="5" />
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="ScrollBarTrackRepeatButtonStyle" TargetType="RepeatButton">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RepeatButton">
+            <Border Background="Transparent" />
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ScrollBar">
+      <Setter Property="Background" Value="{StaticResource PanelBackground}" />
+      <Style.Triggers>
+        <Trigger Property="Orientation" Value="Vertical">
+          <Setter Property="Width" Value="12" />
+        </Trigger>
+        <Trigger Property="Orientation" Value="Horizontal">
+          <Setter Property="Height" Value="12" />
+        </Trigger>
+      </Style.Triggers>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Grid Background="{TemplateBinding Background}">
+              <Track x:Name="PART_Track" IsDirectionReversed="False">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageUpCommand" Focusable="False"
+                                Style="{StaticResource ScrollBarTrackRepeatButtonStyle}" />
+                </Track.DecreaseRepeatButton>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageDownCommand" Focusable="False"
+                                Style="{StaticResource ScrollBarTrackRepeatButtonStyle}" />
+                </Track.IncreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Style="{StaticResource ScrollBarThumbStyle}" />
+                </Track.Thumb>
+              </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="Orientation" Value="Vertical">
+                <Setter TargetName="PART_Track" Property="Orientation" Value="Vertical" />
+                <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="True" />
+              </Trigger>
+            </ControlTemplate.Triggers>
           </ControlTemplate>
         </Setter.Value>
       </Setter>

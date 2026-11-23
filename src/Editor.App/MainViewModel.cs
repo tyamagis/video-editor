@@ -413,31 +413,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
         PlayheadSeconds = next;
     }
 
-    /// <summary>再生ヘッド位置でアクティブな音声つきクリップの音を鳴らす。無ければ止める。</summary>
+    /// <summary>再生ヘッド位置でアクティブな音声つきクリップの音を全て鳴らす。無ければ止める。</summary>
     public void StartAudioAtPlayhead()
     {
-        foreach (var track in Project.Tracks)
+        var sources = Project.Tracks
+            .SelectMany(t => t.Clips)
+            .Where(c => c.IsActiveAt(PlayheadSeconds) && !string.IsNullOrEmpty(c.SourcePath))
+            .Select(c => (Clip: c, Media: MediaItems.FirstOrDefault(m => m.SourcePath == c.SourcePath)))
+            .Where(x => x.Media is not null && x.Media.Info.HasAudio)
+            .Select(x => (x.Media!.SourcePath, x.Clip.InPointSeconds + (PlayheadSeconds - x.Clip.StartSeconds)))
+            .ToList();
+
+        if (sources.Count == 0)
         {
-            foreach (var clip in track.Clips)
-            {
-                if (!clip.IsActiveAt(PlayheadSeconds))
-                    continue;
-                var item = MediaItems.FirstOrDefault(m => m.SourcePath == clip.SourcePath);
-                if (item is null || !item.Info.HasAudio)
-                    continue;
-                var sourceTime = clip.InPointSeconds + (PlayheadSeconds - clip.StartSeconds);
-                try
-                {
-                    _audioPlayer.Play(item.SourcePath, sourceTime);
-                }
-                catch (Exception ex)
-                {
-                    StatusMessage = $"音声の再生に失敗しました：{ex.Message}";
-                }
-                return;
-            }
+            _audioPlayer.Stop();
+            return;
         }
-        _audioPlayer.Stop();
+
+        try
+        {
+            _audioPlayer.Play(sources);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"音声の再生に失敗しました：{ex.Message}";
+        }
     }
 
     /// <summary>再生中なら音声を再生ヘッド位置から鳴らし直す（シーク後に呼ぶ）。</summary>

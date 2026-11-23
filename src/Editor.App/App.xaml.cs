@@ -33,7 +33,7 @@ public partial class App : Application
 
         IFrameRenderer frameRenderer = new TimelineFrameRenderer(thumbnailService, _streamingFrameSource);
         var previewRenderer = new PreviewRenderer(frameRenderer);
-        ITimelineExporter timelineExporter = new FrameSequenceExporter(frameRenderer, ffmpegSettings);
+        ITimelineExporter timelineExporter = new FrameSequenceExporter(frameRenderer, ffmpegSettings, mediaProbe);
 
         var viewModel = new MainViewModel(
             mediaProbe, thumbnailService, exportService, waveformReader,
