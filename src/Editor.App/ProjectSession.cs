@@ -279,6 +279,28 @@ public sealed class ProjectSession : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// テンプレートから新しいプロジェクトを作る（未保存扱い。現在パスは無しになる）。
+    /// 復旧待ちがあっても解除する（テンプレートから作ると決めたため。古い自動保存ファイル自体は残る）。
+    /// </summary>
+    public void NewProjectFromTemplate(EditorProject project)
+    {
+        _host.IsPlaying = false;
+        ClearUndoHistory();
+        _host.SetProject(project);
+        _host.SelectedClip = null;
+        _host.PlayheadSeconds = 0;
+        CurrentProjectPath = null;
+        _host.OnProjectPathChanged();
+        _recoveryPending = false;
+        HasRecoveryAutosave = false;
+        AutosaveInfo = string.Empty;
+        _lastAutosavedJson = ProjectStore.Serialize(_host.Project);
+        UpdateAutosaveStatus();
+        _host.SetStatusMessage("テンプレートから新しいプロジェクトを作りました。保存するには「プロジェクトを保存」してください。");
+        _ = _host.EnsureBindingAnalysesAsync();
+    }
+
+    /// <summary>
     /// 本ファイルより新しい自動保存ファイルの内容でプロジェクトを復旧する。
     /// 現在パスは本ファイルのままにするため、この後の明示保存は本ファイルへ書く。
     /// 自動保存ファイルは消さない（復旧後にまたクラッシュしても復旧できるようにする。

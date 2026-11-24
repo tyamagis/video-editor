@@ -17,6 +17,9 @@
         <MenuItem Header="名前を付けて保存" Click="SaveAsMenu_Click" />
         <MenuItem Header="プロジェクトを開く" Click="LoadMenu_Click" />
         <Separator />
+        <MenuItem Header="テンプレートとして保存…" Click="SaveTemplateMenu_Click" />
+        <MenuItem Header="テンプレートから新規作成…" Click="NewFromTemplateMenu_Click" />
+        <Separator />
         <MenuItem Header="自動保存から復旧" Click="RecoverAutosaveMenu_Click" IsEnabled="{Binding HasRecoveryAutosave}" />
         <MenuItem Header="自動保存ファイルを破棄" Click="DiscardAutosaveMenu_Click" IsEnabled="{Binding HasRecoveryAutosave}" />
         <Separator />
@@ -35,6 +38,12 @@
         <Separator />
         <MenuItem Header="再生ヘッドで分割 (S)" Click="SplitMenu_Click" />
         <MenuItem Header="選択クリップを削除 (Del)" Click="DeleteMenu_Click" />
+        <Separator />
+        <MenuItem Header="マーカーを追加 (M)" Click="AddMarkerMenu_Click" />
+        <MenuItem Header="前のマーカーへ (Ctrl+M)" Click="PrevMarkerMenu_Click" />
+        <MenuItem Header="次のマーカーへ (Shift+M)" Click="NextMarkerMenu_Click" />
+        <Separator />
+        <MenuItem Header="歌詞を一括流し込み…" Click="ImportLyricsMenu_Click" />
       </MenuItem>
     </Menu>
 
@@ -146,6 +155,86 @@
                        AcceptsReturn="True" Height="60" Margin="0,0,0,8" GotFocus="EditableField_GotFocus" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
               <TextBlock Text="フォントサイズ" Foreground="{StaticResource AppForeground}" />
               <TextBox Text="{Binding FontSize, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8" GotFocus="EditableField_GotFocus" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+            </StackPanel>
+
+            <TextBlock Text="テキストアニメーション" FontWeight="SemiBold" Margin="0,12,0,4" Foreground="{StaticResource AppForeground}" Visibility="{Binding IsTextClipSelected, Converter={StaticResource BoolToVis}}" />
+            <StackPanel Visibility="{Binding IsTextClipSelected, Converter={StaticResource BoolToVis}}">
+              <TextBlock Text="イン（登場）" Foreground="{StaticResource AppForeground}" />
+              <ComboBox SelectedValue="{Binding SelectedTextAnimationInKind, Mode=TwoWay}" SelectedValuePath="Tag" Margin="0,0,0,6" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
+                <ComboBoxItem Content="なし" Tag="{x:Static core:TextAnimationKind.None}" />
+                <ComboBoxItem Content="フェードイン" Tag="{x:Static core:TextAnimationKind.Fade}" />
+                <ComboBoxItem Content="スライドイン" Tag="{x:Static core:TextAnimationKind.Slide}" />
+                <ComboBoxItem Content="タイプライター" Tag="{x:Static core:TextAnimationKind.Typewriter}" />
+                <ComboBoxItem Content="カラオケ" Tag="{x:Static core:TextAnimationKind.Karaoke}" />
+                <ComboBoxItem Content="スケールイン" Tag="{x:Static core:TextAnimationKind.Scale}" />
+              </ComboBox>
+              <StackPanel Visibility="{Binding ShowInDirection, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="方向" Foreground="{StaticResource AppForeground}" />
+                <ComboBox SelectedValue="{Binding SelectedTextAnimationInDirection, Mode=TwoWay}" SelectedValuePath="Tag" Margin="0,0,0,6" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
+                  <ComboBoxItem Content="左から" Tag="{x:Static core:TextAnimationDirection.Left}" />
+                  <ComboBoxItem Content="右から" Tag="{x:Static core:TextAnimationDirection.Right}" />
+                  <ComboBoxItem Content="上から" Tag="{x:Static core:TextAnimationDirection.Up}" />
+                  <ComboBoxItem Content="下から" Tag="{x:Static core:TextAnimationDirection.Down}" />
+                </ComboBox>
+              </StackPanel>
+              <Grid Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="64" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="40" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="長さ" VerticalAlignment="Center" Foreground="{StaticResource AppForeground}" />
+                <TextBox Grid.Column="1" Text="{Binding SelectedTextAnimationInDurationSeconds, UpdateSourceTrigger=PropertyChanged}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+                <TextBlock Grid.Column="2" Text="秒" VerticalAlignment="Center" HorizontalAlignment="Right" Foreground="{StaticResource AppForeground}" />
+              </Grid>
+              <TextBlock Text="イージング" Foreground="{StaticResource AppForeground}" />
+              <ComboBox SelectedValue="{Binding SelectedTextAnimationInEasing, Mode=TwoWay}" SelectedValuePath="Tag" Margin="0,0,0,6" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
+                <ComboBoxItem Content="線形" Tag="{x:Static core:TextAnimationEasing.Linear}" />
+                <ComboBoxItem Content="イーズイン" Tag="{x:Static core:TextAnimationEasing.EaseIn}" />
+                <ComboBoxItem Content="イーズアウト" Tag="{x:Static core:TextAnimationEasing.EaseOut}" />
+                <ComboBoxItem Content="イーズイン・アウト" Tag="{x:Static core:TextAnimationEasing.EaseInOut}" />
+              </ComboBox>
+              <CheckBox Content="動きと同時にフェードする" IsChecked="{Binding SelectedTextAnimationInFade, Mode=TwoWay}" Margin="0,0,0,6" Foreground="{StaticResource AppForeground}" Visibility="{Binding ShowInFade, Converter={StaticResource BoolToVis}}" />
+              <StackPanel Visibility="{Binding ShowInHighlightColor, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="カラオケのハイライト色（#RRGGBB）" Foreground="{StaticResource AppForeground}" />
+                <TextBox Text="{Binding SelectedTextAnimationInHighlightColorHex, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,6" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+              </StackPanel>
+
+              <TextBlock Text="アウト（退場）" Margin="0,8,0,0" Foreground="{StaticResource AppForeground}" />
+              <ComboBox SelectedValue="{Binding SelectedTextAnimationOutKind, Mode=TwoWay}" SelectedValuePath="Tag" Margin="0,0,0,6" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
+                <ComboBoxItem Content="なし" Tag="{x:Static core:TextAnimationKind.None}" />
+                <ComboBoxItem Content="フェードアウト" Tag="{x:Static core:TextAnimationKind.Fade}" />
+                <ComboBoxItem Content="スライドアウト" Tag="{x:Static core:TextAnimationKind.Slide}" />
+                <ComboBoxItem Content="スケールアウト" Tag="{x:Static core:TextAnimationKind.Scale}" />
+              </ComboBox>
+              <StackPanel Visibility="{Binding ShowOutDirection, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="方向" Foreground="{StaticResource AppForeground}" />
+                <ComboBox SelectedValue="{Binding SelectedTextAnimationOutDirection, Mode=TwoWay}" SelectedValuePath="Tag" Margin="0,0,0,6" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
+                  <ComboBoxItem Content="左へ" Tag="{x:Static core:TextAnimationDirection.Left}" />
+                  <ComboBoxItem Content="右へ" Tag="{x:Static core:TextAnimationDirection.Right}" />
+                  <ComboBoxItem Content="上へ" Tag="{x:Static core:TextAnimationDirection.Up}" />
+                  <ComboBoxItem Content="下へ" Tag="{x:Static core:TextAnimationDirection.Down}" />
+                </ComboBox>
+              </StackPanel>
+              <Grid Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="64" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="40" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="長さ" VerticalAlignment="Center" Foreground="{StaticResource AppForeground}" />
+                <TextBox Grid.Column="1" Text="{Binding SelectedTextAnimationOutDurationSeconds, UpdateSourceTrigger=PropertyChanged}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+                <TextBlock Grid.Column="2" Text="秒" VerticalAlignment="Center" HorizontalAlignment="Right" Foreground="{StaticResource AppForeground}" />
+              </Grid>
+              <TextBlock Text="イージング" Foreground="{StaticResource AppForeground}" />
+              <ComboBox SelectedValue="{Binding SelectedTextAnimationOutEasing, Mode=TwoWay}" SelectedValuePath="Tag" Margin="0,0,0,6" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
+                <ComboBoxItem Content="線形" Tag="{x:Static core:TextAnimationEasing.Linear}" />
+                <ComboBoxItem Content="イーズイン" Tag="{x:Static core:TextAnimationEasing.EaseIn}" />
+                <ComboBoxItem Content="イーズアウト" Tag="{x:Static core:TextAnimationEasing.EaseOut}" />
+                <ComboBoxItem Content="イーズイン・アウト" Tag="{x:Static core:TextAnimationEasing.EaseInOut}" />
+              </ComboBox>
+              <CheckBox Content="動きと同時にフェードする" IsChecked="{Binding SelectedTextAnimationOutFade, Mode=TwoWay}" Margin="0,0,0,6" Foreground="{StaticResource AppForeground}" Visibility="{Binding ShowOutFade, Converter={StaticResource BoolToVis}}" />
+              <TextBlock Text="タイプライターとカラオケは登場のみです。退場はフェード・スライド・スケールから選べます。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
             </StackPanel>
 
             <TextBlock Text="色調補正" FontWeight="SemiBold" Margin="0,8,0,4" Foreground="{StaticResource AppForeground}" />
@@ -567,6 +656,47 @@
                 <TextBlock Grid.Column="2" Text="{Binding SelectedClipNoiseReductionStrength, StringFormat={}{0:F2}}" VerticalAlignment="Center" HorizontalAlignment="Right" Foreground="{StaticResource AppForeground}" />
               </Grid>
               <TextBlock Text="書き出し時に FFmpeg のノイズ除去（afftdn）で適用されます。プレビューでは効果が聞けません。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
+            </StackPanel>
+
+            <TextBlock Text="マーカー" FontWeight="SemiBold" Margin="0,12,0,4" Foreground="{StaticResource AppForeground}" />
+            <StackPanel>
+              <Grid Margin="0,0,0,2">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="52" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="24" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="時刻" Foreground="{StaticResource MutedForeground}" FontSize="11" />
+                <TextBlock Grid.Column="1" Text="名前" Foreground="{StaticResource MutedForeground}" FontSize="11" />
+              </Grid>
+              <ListBox ItemsSource="{Binding MarkerRows}" SelectedItem="{Binding SelectedMarker, Mode=TwoWay}" MaxHeight="180"
+                       Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <Grid Margin="2">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="52" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="24" />
+                      </Grid.ColumnDefinitions>
+                      <TextBox Grid.Column="0" Text="{Binding TimeSeconds, UpdateSourceTrigger=PropertyChanged}" GotFocus="EditableField_GotFocus" Margin="0,0,4,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+                      <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" GotFocus="EditableField_GotFocus" Margin="0,0,4,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+                      <Button Grid.Column="2" Content="×" Padding="0" Click="DeleteMarkerButton_Click" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <Grid Margin="0,6,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Content="再生ヘッド位置に追加 (M)" Click="AddMarkerButton_Click" Margin="0,0,4,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+                <Button Grid.Column="1" Content="◀ 前" Click="PrevMarkerButton_Click" Margin="0,0,4,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+                <Button Grid.Column="2" Content="次 ▶" Click="NextMarkerButton_Click" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+              </Grid>
+              <TextBlock Text="曲の区切り（サビ・ドロップなど）に名前付きの印を付けます。ルーラー上のマーカーはドラッグで移動できます。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
             </StackPanel>
           </StackPanel>
         </ScrollViewer>

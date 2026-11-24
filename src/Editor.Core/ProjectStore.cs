@@ -37,9 +37,14 @@ public static class ProjectStore
             ?? throw new InvalidDataException("プロジェクトを復元できませんでした。");
 
     public static EditorProject Load(string path)
-    {
-        var json = File.ReadAllText(path);
+        => LoadFromJson(File.ReadAllText(path));
 
+    /// <summary>
+    /// JSON 文字列からプロジェクトを復元する（テンプレート内のプロジェクト読み込み用）。
+    /// Load と同じ版チェック・移行を行う。壊れた JSON は InvalidDataException になる。
+    /// </summary>
+    public static EditorProject LoadFromJson(string json)
+    {
         int version;
         using (var doc = JsonDocument.Parse(json))
         {

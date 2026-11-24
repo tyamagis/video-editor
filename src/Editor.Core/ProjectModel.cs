@@ -490,6 +490,12 @@ public sealed class Clip
     public double FontSize { get; set; } = 64;
     public string FontColorHex { get; set; } = "#FFFFFFFF";
 
+    /// <summary>テキストクリップのインアニメーション。Kind=None（既定）で無し。旧プロジェクト（JSON に項目無し）は Kind=None として開ける。</summary>
+    public TextAnimation AnimationIn { get; set; } = new();
+
+    /// <summary>テキストクリップのアウトアニメーション。Kind=None（既定）で無し。旧プロジェクト（JSON に項目無し）は Kind=None として開ける。</summary>
+    public TextAnimation AnimationOut { get; set; } = new();
+
     // --- 色調補正（フェーズ1：キーフレームなしの固定値。キーフレーム化は後段で） ---
     public double Brightness { get; set; } // -1.0 .. 1.0
     public double Contrast { get; set; } = 1.0; // 0.0 .. 2.0
@@ -544,6 +550,8 @@ public sealed class Clip
         copy.Effects = Effects.Select(e => e.Clone()).ToList();
         copy.AudioBindings = AudioBindings.Select(b => b.Clone()).ToList();
         copy.Visualization = Visualization?.Clone();
+        copy.AnimationIn = AnimationIn?.Clone() ?? new TextAnimation();
+        copy.AnimationOut = AnimationOut?.Clone() ?? new TextAnimation();
         copy.KeyframeTracks = KeyframeTracks
             .Select(t => new KeyframeTrack
             {
@@ -566,6 +574,21 @@ public sealed class Track
     public List<Clip> Clips { get; set; } = new();
     public bool IsVisible { get; set; } = true;
     public bool IsMuted { get; set; }
+}
+
+/// <summary>
+/// タイムライン上の目印。時刻（秒）と名前を持つ。MV作業で曲の区切り
+/// （サビ・ドロップなど）に印を付ける。名前付きであることが用途の要点。
+/// </summary>
+public sealed class Marker
+{
+    /// <summary>タイムライン上の時刻（秒）。</summary>
+    public double TimeSeconds { get; set; }
+
+    /// <summary>マーカーの名前（例：「サビ」「ドロップ」）。</summary>
+    public string Name { get; set; } = string.Empty;
+
+    public Marker Clone() => (Marker)MemberwiseClone();
 }
 
 /// <summary>
@@ -624,6 +647,68 @@ public sealed class EditorProject
     public GridMode GridMode { get; set; } = GridMode.Frame;
 
     public List<Track> Tracks { get; set; } = new();
+
+    private List<Marker> _markers = new();
+
+    /// <summary>
+    /// タイムライン上のマーカー一覧（常に時刻の昇順）。MV作業で曲の区切り
+    /// （サビ・ドロップなど）に印を付ける。
+    /// 不変条件：マーカーは常に時刻の昇順に保つ。追加は AddMarker（挿入位置を維持）、
+    /// 削除は RemoveMarker、時刻の直接書き換えの後は SortMarkers を呼ぶ。
+    /// 代入（JSON読み込みなど）の際は並べ替えで正規化する。
+    /// 旧プロジェクト（Markers フィールド無し）は空リストとして開ける
+    /// （欠けた項目は既定値で補われる）。JSON に null が入っていても空にする。
+    /// </summary>
+    public List<Marker> Markers
+    {
+        get => _markers;
+        set => _markers = (value ?? new List<Marker>()).OrderBy(m => m.TimeSeconds).ToList();
+    }
+
+    /// <summary>
+    /// マーカーを時刻順の正しい位置に挿入する（安定：同じ時刻があればその後ろに入れる）。
+    /// 負の時刻は 0 に丸める。
+    /// </summary>
+    public Marker AddMarker(double timeSeconds, string name)
+    {
+        var marker = new Marker { TimeSeconds = Math.Max(0, timeSeconds), Name = name ?? string.Empty };
+        var lo = 0;
+        var hi = _markers.Count;
+        while (lo < hi)
+        {
+            var mid = (lo + hi) / 2;
+            if (_markers[mid].TimeSeconds <= marker.TimeSeconds)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        _markers.Insert(lo, marker);
+        return marker;
+    }
+
+    /// <summary>マーカーを削除する（削除だけでは順序は崩れない）。</summary>
+    public bool RemoveMarker(Marker marker) => _markers.Remove(marker);
+
+    /// <summary>
+    /// マーカー列を時刻順に並べ替える（安定ソート）。マーカーの時刻を
+    /// 直接書き換えた後など、順序が崩れたときに呼ぶ。
+    /// </summary>
+    public void SortMarkers()
+    {
+        if (_markers.Count < 2)
+            return;
+        var sorted = _markers.OrderBy(m => m.TimeSeconds).ToList();
+        _markers.Clear();
+        _markers.AddRange(sorted);
+    }
+
+    /// <summary>指定時刻より後ろにある最初のマーカー。無ければ null（ちょうど同じ時刻のマーカーは「次」には含めない）。</summary>
+    public Marker? NextMarkerAfter(double timeSeconds)
+        => _markers.FirstOrDefault(m => m.TimeSeconds > timeSeconds + 1e-6);
+
+    /// <summary>指定時刻より前にある最後のマーカー。無ければ null（ちょうど同じ時刻のマーカーは「前」には含めない）。</summary>
+    public Marker? PreviousMarkerBefore(double timeSeconds)
+        => _markers.LastOrDefault(m => m.TimeSeconds < timeSeconds - 1e-6);
 
     /// <summary>全トラックの末尾までの長さ（秒）。トラックが無ければ0。</summary>
     public double DurationSeconds

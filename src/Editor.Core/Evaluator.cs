@@ -28,6 +28,9 @@ public sealed class EvaluatedClipState
 
     /// <summary>可視化クリップの設定（時刻 t で評価済み。可視化クリップでなければ null）。</summary>
     public VisualizationSettings? Visualization { get; init; }
+
+    /// <summary>テキストアニメーションの確定状態（テキストクリップのみ評価。テキスト以外は Identity）。</summary>
+    public TextAnimationState TextAnimation { get; init; } = TextAnimationState.Identity;
 }
 
 /// <summary>キーフレームと固定プロパティから時刻 t の状態を計算する。</summary>
@@ -53,7 +56,15 @@ public static class TimelineEvaluator
             Contrast = clip.Contrast,
             BlendMode = clip.BlendMode,
             Effects = EvaluateEffects(clip, timeSeconds, project, audio),
-            Visualization = EvaluateVisualization(clip, local)
+            Visualization = EvaluateVisualization(clip, local),
+            // テキストクリップだけアニメーションを評価する。文字数は
+            // StringInfo のテキスト要素数（LengthInTextElements）で数える。
+            // レンダラー側も同じ数え方をするため、ここで数え方を統一する。
+            TextAnimation = clip.Kind == ClipKind.Text
+                ? TextAnimation.Evaluate(
+                    clip.AnimationIn, clip.AnimationOut, local, clip.DurationSeconds,
+                    new System.Globalization.StringInfo(clip.Text ?? string.Empty).LengthInTextElements)
+                : TextAnimationState.Identity
         };
     }
 

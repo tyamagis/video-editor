@@ -13,4 +13,9 @@
     <PackageReference Include="FFMpegCore" Version="5.1.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- プリセット保存で JsonDefaults / AtomicFile（Editor.Core）を使う。 -->
+    <ProjectReference Include="..\Editor.Core\Editor.Core.csproj" />
+  </ItemGroup>
+
 </Project>

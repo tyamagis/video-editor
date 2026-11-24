@@ -19,6 +19,9 @@
       <Slider x:Name="ZoomSlider" Width="120" Minimum="20" Maximum="400" Value="80"
               VerticalAlignment="Center" ValueChanged="ZoomSlider_ValueChanged" Foreground="{StaticResource AppForeground}" />
       <Button x:Name="SplitButton" Content="分割 (S)" Margin="12,0,0,0" Click="SplitButton_Click" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+      <Button x:Name="AddMarkerButton" Content="マーカー追加 (M)" Margin="12,0,0,0" Click="AddMarkerButton_Click" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+      <Button x:Name="PrevMarkerButton" Content="◀ 前のマーカー" Margin="6,0,0,0" Click="PrevMarkerButton_Click" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+      <Button x:Name="NextMarkerButton" Content="次のマーカー ▶" Margin="6,0,0,0" Click="NextMarkerButton_Click" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
     </StackPanel>
     <skia:SKElement x:Name="TimelineElement" PaintSurface="OnPaintSurface"
                     MouseLeftButtonDown="OnMouseLeftButtonDown"

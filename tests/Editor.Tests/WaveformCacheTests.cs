@@ -120,7 +120,7 @@ public sealed class WaveformCacheTests
         var data = cache.GetOrRead(sourcePath);
 
         Assert.True(data.MaxPeaks.Max() > 0.4);
-        Assert.True(File.ReadAllText(cachePath).StartsWith("{"));
+        Assert.StartsWith("{", File.ReadAllText(cachePath));
         Assert.NotNull(WaveformCache.TryLoad(sourcePath, 2000, cacheDir));
     }
 

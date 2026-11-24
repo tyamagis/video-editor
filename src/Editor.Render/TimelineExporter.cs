@@ -25,13 +25,13 @@ public sealed class FrameSequenceExporter : ITimelineExporter
 {
     private readonly IFrameRenderer _renderer;
     private readonly FfmpegSettings _settings;
-    private readonly MediaProbe _probe;
+    private readonly AudioExportPlanner _audioPlanner;
 
     public FrameSequenceExporter(IFrameRenderer renderer, FfmpegSettings settings, MediaProbe probe)
     {
         _renderer = renderer;
         _settings = settings;
-        _probe = probe;
+        _audioPlanner = new AudioExportPlanner(probe);
     }
 
     public async Task ExportAsync(
@@ -43,7 +43,7 @@ public sealed class FrameSequenceExporter : ITimelineExporter
         var endSeconds = project.EffectiveExportOutSeconds;
         var totalFrames = Math.Max(1, (int)Math.Ceiling((endSeconds - startSeconds) * settings.FrameRate));
 
-        var audioPlan = await BuildAudioPlanAsync(project, startSeconds, endSeconds, ct)
+        var audioPlan = await _audioPlanner.BuildAudioPlanAsync(project, startSeconds, endSeconds, ct)
             .ConfigureAwait(false);
 
         string args;
@@ -69,20 +69,12 @@ public sealed class FrameSequenceExporter : ITimelineExporter
                    $"-r {settings.FrameRate} -i -{audioInputs} " +
                    $"-filter_complex \"{graph}\" -map 0:v -map \"[{audioPlan.MapLabel}]\" " +
                    $"-c:v libx264 -preset {settings.Preset} -crf {settings.Crf} " +
-                   $"-pix_fmt yuv420p -c:a aac -b:a 192k -r {settings.FrameRate} -t {duration:F3} " +
+                   $"-pix_fmt yuv420p -c:a aac -b:a {settings.AudioBitrateKbps}k -r {settings.FrameRate} -t {duration:F3} " +
                    $"-movflags +faststart \"{outputPath}\"";
         }
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _settings.FfmpegExePath,
-            Arguments = args,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
+        // 標準入力へ生フレームを送るため RedirectStandardInput を有効にする。
+        var startInfo = FfmpegProcess.CreateStartInfo(_settings.FfmpegExePath, args, redirectStandardInput: true);
 
         using var process = new Process { StartInfo = startInfo };
         process.Start();
@@ -123,67 +115,4 @@ public sealed class FrameSequenceExporter : ITimelineExporter
             throw new InvalidOperationException($"タイムライン書き出しに失敗しました: {stderr}");
     }
 
-    /// <summary>書き出し範囲に入る音声つきクリップの入力計画を作る。音声が無ければ MapLabel は null。</summary>
-    private async Task<(List<AudioInput> Inputs, string? MapLabel)> BuildAudioPlanAsync(
-        EditorProject project, double startSeconds, double endSeconds, CancellationToken ct)
-    {
-        var inputs = new List<AudioInput>();
-
-        var clips = project.Tracks
-            .SelectMany(t => t.Clips)
-            .Where(c => !string.IsNullOrEmpty(c.SourcePath)
-                        && c.EndSeconds > startSeconds && c.StartSeconds < endSeconds)
-            .OrderBy(c => c.StartSeconds)
-            .ToList();
-
-        var index = 1; // 0 は映像（標準入力）なので音声は 1 から。
-        foreach (var clip in clips)
-        {
-            ct.ThrowIfCancellationRequested();
-            MediaInfo? info;
-            try
-            {
-                info = await _probe.ProbeAsync(clip.SourcePath, ct).ConfigureAwait(false);
-            }
-            catch
-            {
-                continue; // 読めない素材は音声なしで進む。
-            }
-            if (info is null || !info.HasAudio)
-                continue;
-
-            var overlapStart = Math.Max(clip.StartSeconds, startSeconds);
-            var overlapEnd = Math.Min(clip.EndSeconds, endSeconds);
-            if (overlapEnd <= overlapStart)
-                continue;
-
-            var sourceStart = clip.InPointSeconds + (overlapStart - clip.StartSeconds);
-            var sourceEnd = clip.InPointSeconds + (overlapEnd - clip.StartSeconds);
-            var delayMs = (long)Math.Round((overlapStart - startSeconds) * 1000);
-            var label = $"a{index}";
-            // ノイズ除去が有効なクリップは、書き出し時に afftdn で背景ノイズを減らす
-            // （設計プラン 5章で FFmpeg のフィルタが第一候補。プレビューでは反映されない）。
-            // atrim の前に掛けることで、ファイル全体からノイズ特性を取る。
-            var denoise = clip.NoiseReductionEnabled
-                ? $"afftdn=nr={NoiseReductionDb(clip.NoiseReductionStrength):F1}:nf=-50,"
-                : string.Empty;
-            // 書き出し範囲に入る部分だけ切り出し、範囲内の位置まで遅らせる。
-            var filter = $"[{index}:a]{denoise}atrim=start={sourceStart:F3}:end={sourceEnd:F3}," +
-                         $"asetpts=PTS-STARTPTS,adelay={delayMs}:all=1[{label}]";
-            inputs.Add(new AudioInput(clip.SourcePath, filter, label));
-            index++;
-        }
-
-        if (inputs.Count == 0)
-            return (inputs, null);
-
-        var mapLabel = inputs.Count == 1 ? inputs[0].Label : "aout";
-        return (inputs, mapLabel);
-    }
-
-    /// <summary>ノイズ除去の強さ（0.0〜1.0）を afftdn の nr（dB、1〜30）に写す。</summary>
-    private static double NoiseReductionDb(double strength)
-        => 1.0 + Math.Clamp(strength, 0, 1) * 29.0;
-
-    private sealed record AudioInput(string Path, string Filter, string Label);
 }

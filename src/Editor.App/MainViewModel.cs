@@ -124,6 +124,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
                 _analysisTasks.Clear(); // 解析タスクも新しいプロジェクトのクリップIdで取り直す。
             }
             _project = value;
+            RefreshMarkerRows(); // プロジェクトが変わればマーカー一覧も作り直す（選択は引き継げなければ外れる）。
             OnPropertyChanged();
             OnPropertyChanged(nameof(Bpm));
             OnPropertyChanged(nameof(GridMode));
@@ -179,6 +180,23 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             OnPropertyChanged(nameof(SelectedVisualizationLineWidth));
             OnPropertyChanged(nameof(SelectedVisualizationWindowSeconds));
             OnPropertyChanged(nameof(SelectedVisualizationTrailSeconds));
+            OnPropertyChanged(nameof(IsTextClipSelected));
+            OnPropertyChanged(nameof(SelectedTextAnimationInKind));
+            OnPropertyChanged(nameof(SelectedTextAnimationInDirection));
+            OnPropertyChanged(nameof(SelectedTextAnimationInDurationSeconds));
+            OnPropertyChanged(nameof(SelectedTextAnimationInEasing));
+            OnPropertyChanged(nameof(SelectedTextAnimationInFade));
+            OnPropertyChanged(nameof(SelectedTextAnimationInHighlightColorHex));
+            OnPropertyChanged(nameof(ShowInDirection));
+            OnPropertyChanged(nameof(ShowInFade));
+            OnPropertyChanged(nameof(ShowInHighlightColor));
+            OnPropertyChanged(nameof(SelectedTextAnimationOutKind));
+            OnPropertyChanged(nameof(SelectedTextAnimationOutDirection));
+            OnPropertyChanged(nameof(SelectedTextAnimationOutDurationSeconds));
+            OnPropertyChanged(nameof(SelectedTextAnimationOutEasing));
+            OnPropertyChanged(nameof(SelectedTextAnimationOutFade));
+            OnPropertyChanged(nameof(ShowOutDirection));
+            OnPropertyChanged(nameof(ShowOutFade));
             OnPropertyChanged(nameof(ShowSpectrumSettings));
             OnPropertyChanged(nameof(ShowWaveformSettings));
             OnPropertyChanged(nameof(ShowLissajousSettings));
@@ -216,6 +234,221 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
 
     /// <summary>リサジュー用の設定欄を表示するか（可視化クリップで種類がリサジューのとき）。</summary>
     public bool ShowLissajousSettings => SelectedClip?.Visualization?.Kind == VisualizationKind.Lissajous;
+
+    // ---- テキストアニメーション（インスペクタ） ----
+
+    /// <summary>選択中クリップがテキストクリップか（テキストアニメーション欄の表示に使う）。</summary>
+    public bool IsTextClipSelected => SelectedClip?.Kind == ClipKind.Text;
+
+    /// <summary>選択中テキストクリップの登場アニメーション。テキストクリップ以外が選択されているときは null。</summary>
+    private TextAnimation? SelectedTextAnimationIn
+        => IsTextClipSelected ? SelectedClip!.AnimationIn : null;
+
+    /// <summary>選択中テキストクリップの退場アニメーション。テキストクリップ以外が選択されているときは null。</summary>
+    private TextAnimation? SelectedTextAnimationOut
+        => IsTextClipSelected ? SelectedClip!.AnimationOut : null;
+
+    /// <summary>登場アニメーションの種類。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。種類が変わると方向・フェード・ハイライト色欄の表示も変わる。</summary>
+    public TextAnimationKind SelectedTextAnimationInKind
+    {
+        get => SelectedTextAnimationIn?.Kind ?? TextAnimationKind.None;
+        set
+        {
+            var anim = SelectedTextAnimationIn;
+            if (anim is null || anim.Kind == value)
+                return;
+            BeginEdit();
+            anim.Kind = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ShowInDirection));
+            OnPropertyChanged(nameof(ShowInFade));
+            OnPropertyChanged(nameof(ShowInHighlightColor));
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>登場アニメーションのスライド方向（スライドのときだけ使う）。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。</summary>
+    public TextAnimationDirection SelectedTextAnimationInDirection
+    {
+        get => SelectedTextAnimationIn?.Direction ?? TextAnimationDirection.Left;
+        set
+        {
+            var anim = SelectedTextAnimationIn;
+            if (anim is null || anim.Direction == value)
+                return;
+            BeginEdit();
+            anim.Direction = value;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>登場アニメーションの継続時間（秒）。TextAnimation.ClampDuration で 0.05〜60 に丸める（NaN は 0.5）。</summary>
+    public double SelectedTextAnimationInDurationSeconds
+    {
+        get => SelectedTextAnimationIn?.DurationSeconds ?? 0.5;
+        set
+        {
+            var anim = SelectedTextAnimationIn;
+            if (anim is null)
+                return;
+            var clamped = TextAnimation.ClampDuration(value);
+            if (Math.Abs(anim.DurationSeconds - clamped) < 1e-9)
+                return;
+            BeginEdit();
+            anim.DurationSeconds = clamped;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>登場アニメーションのイージング。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。タイプライター・カラオケでは評価時に無視される。</summary>
+    public TextAnimationEasing SelectedTextAnimationInEasing
+    {
+        get => SelectedTextAnimationIn?.Easing ?? TextAnimationEasing.EaseOut;
+        set
+        {
+            var anim = SelectedTextAnimationIn;
+            if (anim is null || anim.Easing == value)
+                return;
+            BeginEdit();
+            anim.Easing = value;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>登場アニメーションで動きと同時にフェードするか（スライド・スケールのときだけ使う）。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。</summary>
+    public bool SelectedTextAnimationInFade
+    {
+        get => SelectedTextAnimationIn?.Fade ?? true;
+        set
+        {
+            var anim = SelectedTextAnimationIn;
+            if (anim is null || anim.Fade == value)
+                return;
+            BeginEdit();
+            anim.Fade = value;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>登場アニメーションのカラオケ用ハイライト色（"#RRGGBB"。カラオケのときだけ使う）。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。</summary>
+    public string SelectedTextAnimationInHighlightColorHex
+    {
+        get => SelectedTextAnimationIn?.HighlightColorHex ?? "#FFFF00";
+        set
+        {
+            var anim = SelectedTextAnimationIn;
+            if (anim is null || anim.HighlightColorHex == value)
+                return;
+            BeginEdit();
+            anim.HighlightColorHex = value;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>登場アニメーションで方向を選ぶ欄を表示するか（スライドのときだけ）。</summary>
+    public bool ShowInDirection => SelectedTextAnimationIn?.Kind == TextAnimationKind.Slide;
+
+    /// <summary>登場アニメーションで「動きと同時にフェードする」を表示するか（スライド・スケールのときだけ）。</summary>
+    public bool ShowInFade => SelectedTextAnimationIn?.Kind is TextAnimationKind.Slide or TextAnimationKind.Scale;
+
+    /// <summary>登場アニメーションでカラオケのハイライト色欄を表示するか（カラオケのときだけ）。</summary>
+    public bool ShowInHighlightColor => SelectedTextAnimationIn?.Kind == TextAnimationKind.Karaoke;
+
+    /// <summary>退場アニメーションの種類（タイプライター・カラオケは出さない。評価側でもカラオケのアウト指定は無視される）。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。種類が変わると方向・フェード欄の表示も変わる。</summary>
+    public TextAnimationKind SelectedTextAnimationOutKind
+    {
+        get => SelectedTextAnimationOut?.Kind ?? TextAnimationKind.None;
+        set
+        {
+            var anim = SelectedTextAnimationOut;
+            if (anim is null || anim.Kind == value)
+                return;
+            BeginEdit();
+            anim.Kind = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ShowOutDirection));
+            OnPropertyChanged(nameof(ShowOutFade));
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>退場アニメーションのスライド方向（スライドのときだけ使う）。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。</summary>
+    public TextAnimationDirection SelectedTextAnimationOutDirection
+    {
+        get => SelectedTextAnimationOut?.Direction ?? TextAnimationDirection.Left;
+        set
+        {
+            var anim = SelectedTextAnimationOut;
+            if (anim is null || anim.Direction == value)
+                return;
+            BeginEdit();
+            anim.Direction = value;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>退場アニメーションの継続時間（秒）。TextAnimation.ClampDuration で 0.05〜60 に丸める（NaN は 0.5）。</summary>
+    public double SelectedTextAnimationOutDurationSeconds
+    {
+        get => SelectedTextAnimationOut?.DurationSeconds ?? 0.5;
+        set
+        {
+            var anim = SelectedTextAnimationOut;
+            if (anim is null)
+                return;
+            var clamped = TextAnimation.ClampDuration(value);
+            if (Math.Abs(anim.DurationSeconds - clamped) < 1e-9)
+                return;
+            BeginEdit();
+            anim.DurationSeconds = clamped;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>退場アニメーションのイージング。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。</summary>
+    public TextAnimationEasing SelectedTextAnimationOutEasing
+    {
+        get => SelectedTextAnimationOut?.Easing ?? TextAnimationEasing.EaseOut;
+        set
+        {
+            var anim = SelectedTextAnimationOut;
+            if (anim is null || anim.Easing == value)
+                return;
+            BeginEdit();
+            anim.Easing = value;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>退場アニメーションで動きと同時にフェードするか（スライド・スケールのときだけ使う）。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。</summary>
+    public bool SelectedTextAnimationOutFade
+    {
+        get => SelectedTextAnimationOut?.Fade ?? true;
+        set
+        {
+            var anim = SelectedTextAnimationOut;
+            if (anim is null || anim.Fade == value)
+                return;
+            BeginEdit();
+            anim.Fade = value;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>退場アニメーションで方向を選ぶ欄を表示するか（スライドのときだけ）。</summary>
+    public bool ShowOutDirection => SelectedTextAnimationOut?.Kind == TextAnimationKind.Slide;
+
+    /// <summary>退場アニメーションで「動きと同時にフェードする」を表示するか（スライド・スケールのときだけ）。</summary>
+    public bool ShowOutFade => SelectedTextAnimationOut?.Kind is TextAnimationKind.Slide or TextAnimationKind.Scale;
 
     /// <summary>音声つきクリップ（音声または映像で、素材パスがある）が選択されているか。無音カット・ノイズ除去欄の有効化に使う。</summary>
     public bool HasAudioClip => SelectedClip is not null
@@ -917,6 +1150,27 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         NotifyTimelineChanged();
     }
 
+    /// <summary>
+    /// 歌詞ファイル（1行1フレーズ）を読み、テキストクリップとして一括で配置する。
+    /// 読み込みに失敗した場合は LyricsImportException（何も配置しない）。
+    /// 配置は1回の操作としてアンドゥできる（BeginEdit を一度だけ呼ぶ）。
+    /// 追加するクリップは手動のテキスト追加と同じ既定値（フォント・サイズ・色）になる。
+    /// </summary>
+    /// <returns>配置したクリップの数。</returns>
+    public int ImportLyrics(string path, LyricsImportOptions options)
+    {
+        // 読み込み・検証を先に済ませる。失敗したときはスナップショットを積まない。
+        var phrases = LyricsFileReader.ReadPhrases(path, options);
+        var plan = LyricsImport.PlanClips(phrases, options);
+
+        BeginEdit();
+        var added = LyricsImport.ImportInto(Project, plan);
+        SelectedClip = added.FirstOrDefault();
+        NotifyTimelineChanged();
+        StatusMessage = $"歌詞を {added.Count} 行流し込みました：{Path.GetFileName(path)}";
+        return added.Count;
+    }
+
     /// <summary>「可視化を追加」で選んでいる種類（既定はスペクトル）。</summary>
     private VisualizationKind _newVisualizationKind = VisualizationKind.Spectrum;
 
@@ -1057,6 +1311,108 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         }
         SelectedClip = null;
         NotifyTimelineChanged();
+    }
+
+    // ---- マーカー（MV作業で曲の区切り・サビ・ドロップに印を付ける） ----
+
+    /// <summary>マーカー一覧の表示・編集用行（時刻順）。</summary>
+    public ObservableCollection<MarkerRow> MarkerRows { get; } = new();
+
+    private MarkerRow? _selectedMarker;
+
+    /// <summary>選択中のマーカー行（ルーラーでクリックしたもの・一覧で選んだもの）。null は未選択。</summary>
+    public MarkerRow? SelectedMarker
+    {
+        get => _selectedMarker;
+        set { _selectedMarker = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>マーカー行を作り直す（時刻順）。選択中のマーカーが残っていれば選択を引き継ぐ。</summary>
+    public void RefreshMarkerRows()
+    {
+        var selected = _selectedMarker?.Marker;
+        MarkerRows.Clear();
+        foreach (var marker in Project.Markers)
+            MarkerRows.Add(new MarkerRow(this, marker));
+        SelectedMarker = selected is null
+            ? null
+            : MarkerRows.FirstOrDefault(r => r.Marker == selected);
+    }
+
+    /// <summary>再生ヘッド位置にマーカーを追加する。名前は「マーカー N」（未使用の最小の番号）。</summary>
+    public void AddMarkerAtPlayhead()
+    {
+        BeginEdit();
+        var marker = Project.AddMarker(PlayheadSeconds, NextDefaultMarkerName());
+        RefreshMarkerRows();
+        SelectedMarker = MarkerRows.FirstOrDefault(r => r.Marker == marker);
+        NotifyTimelineChanged();
+        StatusMessage = $"マーカーを追加しました：{marker.Name}（{marker.TimeSeconds:F2}s）";
+    }
+
+    /// <summary>未使用の最小の番号で「マーカー N」を作る（削除で空いた番号は再利用する）。</summary>
+    private string NextDefaultMarkerName()
+    {
+        var n = 1;
+        while (Project.Markers.Any(m => m.Name == $"マーカー {n}"))
+            n++;
+        return $"マーカー {n}";
+    }
+
+    /// <summary>マーカーを削除する。</summary>
+    public void DeleteMarker(MarkerRow row)
+    {
+        if (!Project.Markers.Contains(row.Marker))
+            return;
+        BeginEdit();
+        var name = row.Marker.Name;
+        Project.RemoveMarker(row.Marker);
+        RefreshMarkerRows();
+        NotifyTimelineChanged();
+        StatusMessage = $"マーカーを削除しました：{name}";
+    }
+
+    /// <summary>選択中のマーカーを削除する。未選択なら何もしない。</summary>
+    public void DeleteSelectedMarker()
+    {
+        if (SelectedMarker is not null)
+            DeleteMarker(SelectedMarker);
+    }
+
+    /// <summary>指定マーカーの行を選択する（ルーラーでクリックしたとき）。行が無ければ何もしない。</summary>
+    public void SelectMarker(Marker marker)
+    {
+        var row = MarkerRows.FirstOrDefault(r => r.Marker == marker);
+        if (row is not null)
+            SelectedMarker = row;
+    }
+
+    /// <summary>再生ヘッドを次のマーカーへ移動する。次のマーカーが無ければ何もしない。</summary>
+    public void JumpToNextMarker()
+    {
+        var next = Project.NextMarkerAfter(PlayheadSeconds);
+        if (next is null)
+        {
+            StatusMessage = "次のマーカーはありません。";
+            return;
+        }
+        PlayheadSeconds = next.TimeSeconds;
+        SelectMarker(next);
+        StatusMessage = $"マーカー「{next.Name}」へ移動しました（{PlayheadSeconds:F2}s）。";
+    }
+
+    /// <summary>再生ヘッドを前のマーカーへ移動する。前のマーカーが無ければ何もしない。</summary>
+    public void JumpToPreviousMarker()
+    {
+        var prev = Project.PreviousMarkerBefore(PlayheadSeconds);
+        if (prev is null)
+        {
+            StatusMessage = "前のマーカーはありません。";
+            return;
+        }
+        PlayheadSeconds = prev.TimeSeconds;
+        SelectMarker(prev);
+        StatusMessage = $"マーカー「{prev.Name}」へ移動しました（{PlayheadSeconds:F2}s）。";
     }
 
     /// <summary>選択中クリップ・選択中パラメータのキーフレーム行を作り直す（時刻順）。ついでに選べるパラメータ一覧も作り直す。</summary>
@@ -1777,6 +2133,29 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
 
     /// <summary>プロジェクトファイルを読み込む。自動保存ファイルがあれば復旧待ちにする。</summary>
     public void LoadProject(string path) => _session.LoadProject(path);
+
+    // ---- プロジェクトテンプレート ----
+
+    /// <summary>現在のプロジェクトをテンプレートとして保存する（同名があれば上書き。保存先は既定のテンプレートフォルダ）。</summary>
+    public SaveTemplateResult SaveAsTemplate(string name) => TemplateStore.Save(name, Project);
+
+    /// <summary>同名（大文字・小文字を区別しない）のテンプレートがあるか（上書き確認に使う）。</summary>
+    public bool TemplateExists(string name) => TemplateStore.TemplateExists(name);
+
+    /// <summary>テンプレートの一覧を取得する（名前順。壊れたファイルも「読み込めません」として含む）。</summary>
+    public IReadOnlyList<TemplateInfo> ListTemplates() => TemplateStore.List();
+
+    /// <summary>
+    /// テンプレートから新しいプロジェクトを作る（未保存扱い）。
+    /// 参照メディアが見つからないクリップは配置だけ残し、見つからなかったファイルの一覧を結果に含める。
+    /// テンプレートファイルが壊れている場合は例外を投げる（現在のプロジェクトは変わらない）。
+    /// </summary>
+    public TemplateCreateResult NewProjectFromTemplate(string path)
+    {
+        var result = TemplateStore.CreateProject(path);
+        _session.NewProjectFromTemplate(result.Project);
+        return result;
+    }
 
     /// <summary>本ファイルより新しい自動保存ファイルの内容でプロジェクトを復旧する。</summary>
     public void RecoverFromAutosave() => _session.RecoverFromAutosave();

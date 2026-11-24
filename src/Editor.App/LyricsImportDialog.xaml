@@ -1,0 +1,22 @@
+<Window x:Class="Editor.App.LyricsImportDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="歌詞を一括流し込み" Width="380" Height="360"
+        Background="{StaticResource AppBackground}" Foreground="{StaticResource AppForeground}"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False">
+  <StackPanel Margin="12">
+    <TextBlock x:Name="FileNameText" TextWrapping="Wrap" Foreground="{StaticResource MutedForeground}" Margin="0,0,0,10" />
+    <TextBlock Text="開始位置（秒）" Foreground="{StaticResource AppForeground}" />
+    <TextBox x:Name="StartBox" Margin="0,0,0,8" />
+    <TextBlock Text="配置間隔（秒）" Foreground="{StaticResource AppForeground}" />
+    <TextBox x:Name="IntervalBox" Margin="0,0,0,8" />
+    <TextBlock Text="1クリップの長さ（秒）" Foreground="{StaticResource AppForeground}" />
+    <TextBox x:Name="DurationBox" Margin="0,0,0,8" />
+    <CheckBox x:Name="SkipEmptyCheck" Content="空行をスキップする" IsChecked="True" Margin="0,0,0,8" />
+    <TextBlock Text="1行を1つのテキストクリップにします。間隔は次のクリップの開始までの秒数です（長さより短いとクリップが重なります）。既存のテキストクリップと同じフォント・サイズ・色で配置されます。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,0,0,12" />
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button Content="流し込む" Click="OkButton_Click" Margin="0,0,8,0" IsDefault="True" />
+      <Button Content="キャンセル" Click="CancelButton_Click" IsCancel="True" />
+    </StackPanel>
+  </StackPanel>
+</Window>

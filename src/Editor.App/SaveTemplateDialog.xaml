@@ -1,0 +1,17 @@
+<Window x:Class="Editor.App.SaveTemplateDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="テンプレートとして保存" Width="380" Height="210"
+        Background="{StaticResource AppBackground}" Foreground="{StaticResource AppForeground}"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False">
+  <StackPanel Margin="12">
+    <TextBlock Text="テンプレート名" Foreground="{StaticResource AppForeground}" />
+    <TextBox x:Name="TemplateNameBox" Margin="0,0,0,8" />
+    <TextBlock Text="トラック構成・クリップ配置・テキスト・エフェクト・BPMなどのプロジェクト設定が保存されます。メディアファイルそのものは含まれず、ファイルへの参照だけが残ります。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,0,0,8" />
+    <TextBlock Text="同名のテンプレートがある場合は上書きします（保存前に確認します）。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,0,0,12" />
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button Content="保存" Click="OkButton_Click" Margin="0,0,8,0" IsDefault="True" />
+      <Button Content="キャンセル" Click="CancelButton_Click" IsCancel="True" />
+    </StackPanel>
+  </StackPanel>
+</Window>

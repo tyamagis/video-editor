@@ -14,12 +14,20 @@ public sealed record ExportSettings(
     int Height = 1080,
     int FrameRate = 30,
     int Crf = 20,
-    string Preset = "medium")
+    string Preset = "medium",
+    int AudioBitrateKbps = 192)
 {
     public static ExportSettings Hd30 { get; } = new(1920, 1080, 30);
     public static ExportSettings Hd60 { get; } = new(1920, 1080, 60);
     public static ExportSettings Uhd30 { get; } = new(3840, 2160, 30);
     public static ExportSettings Uhd60 { get; } = new(3840, 2160, 60);
+
+    /// <summary>x264 のエンコーダープリセット一覧（速い→遅い・高画質の順）。</summary>
+    public static IReadOnlyList<string> EncoderPresets { get; } =
+    [
+        "ultrafast", "superfast", "veryfast", "faster", "fast",
+        "medium", "slow", "slower", "veryslow", "placebo"
+    ];
 
     public void Validate()
     {
@@ -29,6 +37,11 @@ public sealed record ExportSettings(
             throw new ArgumentOutOfRangeException(nameof(FrameRate), "フレームレートは正の値にしてください。");
         if (Crf is < 0 or > 51)
             throw new ArgumentOutOfRangeException(nameof(Crf), "CRFは0〜51の範囲にしてください。");
+        if (!EncoderPresets.Contains(Preset, StringComparer.OrdinalIgnoreCase))
+            throw new ArgumentException(
+                $"エンコーダープリセットは {string.Join(" / ", EncoderPresets)} のいずれかにしてください。", nameof(Preset));
+        if (AudioBitrateKbps is < 16 or > 512)
+            throw new ArgumentOutOfRangeException(nameof(AudioBitrateKbps), "音声ビットレートは16〜512 kbpsの範囲にしてください。");
     }
 }
 
@@ -62,7 +75,7 @@ public sealed class ExportService
         var args = $"-y -ss {inPointSeconds:F3} -i \"{sourcePath}\" -t {durationSeconds:F3} " +
                    $"-c:v libx264 -preset {settings.Preset} -crf {settings.Crf} " +
                    $"-pix_fmt yuv420p -r {settings.FrameRate} -s {settings.Width}x{settings.Height} " +
-                   $"-c:a aac -b:a 192k -movflags +faststart \"{outputPath}\"";
+                   $"-c:a aac -b:a {settings.AudioBitrateKbps}k -movflags +faststart \"{outputPath}\"";
 
         var exitCode = await FfmpegProcess.RunWithProgressAsync(
             _settings.FfmpegExePath, args, durationSeconds, progress, ct).ConfigureAwait(false);

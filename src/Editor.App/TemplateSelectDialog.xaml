@@ -1,0 +1,20 @@
+<Window x:Class="Editor.App.TemplateSelectDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="テンプレートから新規作成" Width="460" Height="380"
+        Background="{StaticResource AppBackground}" Foreground="{StaticResource AppForeground}"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False">
+  <StackPanel Margin="12">
+    <TextBlock Text="テンプレートを選んでください" Foreground="{StaticResource AppForeground}" Margin="0,0,0,8" />
+    <ListBox x:Name="TemplateList" Height="220" Margin="0,0,0,8" DisplayMemberPath="DisplayText"
+             Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}"
+             MouseDoubleClick="TemplateList_MouseDoubleClick" />
+    <TextBlock Text="テンプレートから作ったプロジェクトは未保存の新規プロジェクトになります。参照メディアが見つからないクリップは配置だけ残ります。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,0,0,8" />
+    <TextBlock x:Name="EmptyText" Text="テンプレートがありません。「ファイル」→「テンプレートとして保存」から作れます。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,0,0,8" Visibility="Collapsed" />
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button Content="削除" Click="DeleteButton_Click" Margin="0,0,8,0" />
+      <Button Content="新規作成" Click="OkButton_Click" Margin="0,0,8,0" IsDefault="True" />
+      <Button Content="キャンセル" Click="CancelButton_Click" IsCancel="True" />
+    </StackPanel>
+  </StackPanel>
+</Window>

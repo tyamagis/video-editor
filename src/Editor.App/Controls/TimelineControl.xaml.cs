@@ -26,9 +26,10 @@ public partial class TimelineControl : UserControl
 
     private readonly Dictionary<Clip, SKRect> _clipRects = new();
 
-    private enum DragMode { None, Move, Trim, Seek }
+    private enum DragMode { None, Move, Trim, Seek, Marker }
     private DragMode _dragMode = DragMode.None;
     private Clip? _dragClip;
+    private Marker? _dragMarker;
     private double _dragOffsetX;
 
     /// <summary>このドラッグでアンドゥ用の合図を出したか（1回のドラッグで1回だけ出す）。</summary>
@@ -45,6 +46,19 @@ public partial class TimelineControl : UserControl
     public EditorProject? Project { get; set; }
     public double PlayheadSeconds { get; set; }
     public double PixelsPerSecond { get; set; } = 80;
+
+    private Marker? _selectedMarker;
+
+    /// <summary>選択中のマーカー（ルーラーでクリックしたもの・一覧で選んだもの）。選択中は目立つ色で描く。</summary>
+    public Marker? SelectedMarker
+    {
+        get => _selectedMarker;
+        set
+        {
+            _selectedMarker = value;
+            InvalidateTimeline();
+        }
+    }
 
     private BeatMap? _detectedBeatMap;
 
@@ -109,6 +123,14 @@ public partial class TimelineControl : UserControl
     public event EventHandler? SeekDragFinished;
     /// <summary>クリップがクリックされた。</summary>
     public event EventHandler<Clip>? ClipSelected;
+    /// <summary>マーカーがルーラー上でクリックされた（選択する）。</summary>
+    public event EventHandler<Marker>? MarkerSelected;
+    /// <summary>マーカー追加ボタンが押された。</summary>
+    public event EventHandler? AddMarkerRequested;
+    /// <summary>前のマーカーボタンが押された。</summary>
+    public event EventHandler? PreviousMarkerRequested;
+    /// <summary>次のマーカーボタンが押された。</summary>
+    public event EventHandler? NextMarkerRequested;
     public event EventHandler? SplitRequested;
     /// <summary>ドラッグなどの編集が終わった。</summary>
     public event EventHandler? TimelineChanged;
@@ -168,6 +190,15 @@ public partial class TimelineControl : UserControl
     private void SplitButton_Click(object sender, RoutedEventArgs e)
         => SplitRequested?.Invoke(this, EventArgs.Empty);
 
+    private void AddMarkerButton_Click(object sender, RoutedEventArgs e)
+        => AddMarkerRequested?.Invoke(this, EventArgs.Empty);
+
+    private void PrevMarkerButton_Click(object sender, RoutedEventArgs e)
+        => PreviousMarkerRequested?.Invoke(this, EventArgs.Empty);
+
+    private void NextMarkerButton_Click(object sender, RoutedEventArgs e)
+        => NextMarkerRequested?.Invoke(this, EventArgs.Empty);
+
     private void OnPaintSurface(object sender, SKPaintSurfaceEventArgs e)
     {
         var canvas = e.Surface.Canvas;
@@ -186,6 +217,7 @@ public partial class TimelineControl : UserControl
         DrawTracks(canvas, info.Width);
         DrawTransitions(canvas);
         DrawExportRange(canvas, info.Width, info.Height);
+        DrawMarkers(canvas, info.Width, info.Height);
         DrawPlayhead(canvas, info.Height);
     }
 
@@ -460,6 +492,80 @@ public partial class TimelineControl : UserControl
         canvas.DrawPath(path, fillPaint);
     }
 
+    /// <summary>
+    /// マーカーを描く。ルーラーに下向きの三角の旗と名前ラベル、タイムライン全体に
+    /// 薄い縦線を引く。選択中のマーカーは琥珀色で目立たせる。
+    /// 名前ラベルは次のマーカーの旗や右端と重なりそうなときは描かない
+    /// （ルーラーが文字で埋まるのを防ぐ）。
+    /// </summary>
+    private void DrawMarkers(SKCanvas canvas, int width, float height)
+    {
+        if (Project is null || Project.Markers.Count == 0)
+            return;
+
+        using var linePaint = new SKPaint
+        {
+            Color = new SKColor(0xFF, 0x2E, 0x88).WithAlpha(110),
+            StrokeWidth = 1.5f,
+            IsAntialias = true
+        };
+        using var selectedLinePaint = new SKPaint
+        {
+            Color = new SKColor(0xFF, 0xD1, 0x66).WithAlpha(180),
+            StrokeWidth = 2,
+            IsAntialias = true
+        };
+        using var flagPaint = new SKPaint { Color = new SKColor(0xFF, 0x2E, 0x88), IsAntialias = true };
+        using var selectedFlagPaint = new SKPaint { Color = new SKColor(0xFF, 0xD1, 0x66), IsAntialias = true };
+        using var textPaint = CreateTextPaint(11, new SKColor(0xFF, 0x6E, 0xB4));
+        using var selectedTextPaint = CreateTextPaint(11, new SKColor(0xFF, 0xD1, 0x66));
+
+        var markers = Project.Markers; // 時刻順が不変条件。
+        for (var i = 0; i < markers.Count; i++)
+        {
+            var marker = markers[i];
+            var x = (float)(marker.TimeSeconds * PixelsPerSecond);
+            if (x < 0 || x > width)
+                continue;
+
+            var selected = SelectedMarker == marker;
+            canvas.DrawLine(x, 0, x, height, selected ? selectedLinePaint : linePaint);
+
+            // ルーラー内の旗（下向きの三角）。
+            using var flag = new SKPath();
+            flag.MoveTo(x - 6, 0);
+            flag.LineTo(x + 6, 0);
+            flag.LineTo(x, 11);
+            flag.Close();
+            canvas.DrawPath(flag, selected ? selectedFlagPaint : flagPaint);
+
+            if (string.IsNullOrEmpty(marker.Name))
+                continue;
+            // 次のマーカーの旗より手前・右端より手前に収まるときだけ名前を描く。
+            var nextX = i + 1 < markers.Count
+                ? (float)(markers[i + 1].TimeSeconds * PixelsPerSecond)
+                : float.MaxValue;
+            var textWidth = (selected ? selectedTextPaint : textPaint).MeasureText(marker.Name);
+            if (x + 8 + textWidth > Math.Min(width, nextX - 4))
+                continue;
+            canvas.DrawText(marker.Name, x + 8, 16, selected ? selectedTextPaint : textPaint);
+        }
+    }
+
+    /// <summary>ルーラー上でクリックされた位置のマーカー（旗の左右6px以内）。無ければ null。</summary>
+    private Marker? HitTestMarker(Point pos)
+    {
+        if (Project is null || pos.Y >= HeaderHeight)
+            return null;
+        foreach (var marker in Project.Markers)
+        {
+            var x = marker.TimeSeconds * PixelsPerSecond;
+            if (Math.Abs(pos.X - x) <= 6)
+                return marker;
+        }
+        return null;
+    }
+
     private void DrawPlayhead(SKCanvas canvas, float height)
     {
         var x = (float)(PlayheadSeconds * PixelsPerSecond);
@@ -475,6 +581,15 @@ public partial class TimelineControl : UserControl
 
         if (pos.Y < HeaderHeight)
         {
+            // マーカーの旗を掴んだらマーカーのドラッグ（シークにはしない）。
+            var hitMarker = HitTestMarker(pos);
+            if (hitMarker is not null)
+            {
+                _dragMode = DragMode.Marker;
+                _dragMarker = hitMarker;
+                MarkerSelected?.Invoke(this, hitMarker);
+                return;
+            }
             _dragMode = DragMode.Seek;
             SeekRequested?.Invoke(this, pos.X / PixelsPerSecond);
             return;
@@ -511,6 +626,23 @@ public partial class TimelineControl : UserControl
         {
             var seekPos = e.GetPosition(TimelineElement);
             SeekRequested?.Invoke(this, seekPos.X / PixelsPerSecond);
+            return;
+        }
+
+        if (_dragMode == DragMode.Marker)
+        {
+            if (_dragMarker is null || Project is null)
+                return;
+            // 実際に動き始めたときだけ1回、アンドゥ用の合図を出す。
+            if (!_editSnapshotTaken)
+            {
+                _editSnapshotTaken = true;
+                EditStarted?.Invoke(this, EventArgs.Empty);
+            }
+            var markerPos = e.GetPosition(TimelineElement);
+            _dragMarker.TimeSeconds = Math.Max(0, markerPos.X / PixelsPerSecond);
+            Project.SortMarkers();
+            InvalidateTimeline();
             return;
         }
 
@@ -566,6 +698,7 @@ public partial class TimelineControl : UserControl
             TimelineChanged?.Invoke(this, EventArgs.Empty);
         _dragMode = DragMode.None;
         _dragClip = null;
+        _dragMarker = null;
         _editSnapshotTaken = false;
         TimelineElement.ReleaseMouseCapture();
         InvalidateTimeline();

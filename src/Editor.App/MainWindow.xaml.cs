@@ -52,9 +52,18 @@ public partial class MainWindow : Window
                 _viewModel.AddMediaToTimeline(item, drop.TimeSeconds);
         };
         TimelineControl.ClipSelected += (_, clip) => _viewModel.SelectedClip = clip;
+        TimelineControl.MarkerSelected += (_, marker) => _viewModel.SelectMarker(marker);
+        TimelineControl.AddMarkerRequested += (_, _) => _viewModel.AddMarkerAtPlayhead();
+        TimelineControl.PreviousMarkerRequested += (_, _) => _viewModel.JumpToPreviousMarker();
+        TimelineControl.NextMarkerRequested += (_, _) => _viewModel.JumpToNextMarker();
         TimelineControl.SplitRequested += (_, _) => _viewModel.SplitAtPlayhead();
         TimelineControl.EditStarted += (_, _) => _viewModel.BeginEdit();
-        TimelineControl.TimelineChanged += (_, _) => _viewModel.NotifyTimelineChanged();
+        TimelineControl.TimelineChanged += (_, _) =>
+        {
+            _viewModel.NotifyTimelineChanged();
+            // マーカーのドラッグなどで時刻が変わったとき、一覧の表示も合わせる。
+            _viewModel.RefreshMarkerRows();
+        };
         TimelineControl.GridModeChanged += (_, _) => _viewModel.GridMode = TimelineControl.GridMode;
         TimelineControl.ShowWaveformChanged += (_, _) => _viewModel.ShowWaveform = TimelineControl.ShowWaveform;
 
@@ -94,6 +103,11 @@ public partial class MainWindow : Window
         else if (e.PropertyName == nameof(MainViewModel.DetectedBeatMap))
         {
             TimelineControl.DetectedBeatMap = _viewModel.DetectedBeatMap;
+            TimelineControl.InvalidateTimeline();
+        }
+        else if (e.PropertyName == nameof(MainViewModel.SelectedMarker))
+        {
+            TimelineControl.SelectedMarker = _viewModel.SelectedMarker?.Marker;
             TimelineControl.InvalidateTimeline();
         }
         else if (e.PropertyName == nameof(MainViewModel.ShowSpectrum))
@@ -152,6 +166,12 @@ public partial class MainWindow : Window
             _viewModel.SplitAtPlayhead();
         else if (e.Key == Key.Delete)
             _viewModel.DeleteSelectedClip();
+        else if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.M)
+            _viewModel.JumpToPreviousMarker();
+        else if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) && e.Key == Key.M)
+            _viewModel.JumpToNextMarker();
+        else if (e.Key == Key.M)
+            _viewModel.AddMarkerAtPlayhead();
         else if (e.Key == Key.I)
             _viewModel.SetExportInAtPlayhead();
         else if (e.Key == Key.O)
@@ -349,8 +369,82 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 現在のプロジェクトをテンプレートとして保存する。名前をダイアログで聞き、
+    /// 同名のテンプレートがあれば上書きの確認を取ってから保存する。
+    /// </summary>
+    private void SaveTemplateMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveTemplateDialog(_viewModel.Project.Name) { Owner = this };
+        if (dialog.ShowDialog() != true)
+            return;
+        var name = dialog.TemplateName;
+        try
+        {
+            if (_viewModel.TemplateExists(name))
+            {
+                var confirm = MessageBox.Show(this,
+                    $"テンプレート「{name}」は既にあります。上書きしますか？",
+                    "テンプレートの保存", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (confirm != MessageBoxResult.Yes)
+                    return;
+            }
+            var result = _viewModel.SaveAsTemplate(name);
+            if (result == SaveTemplateResult.InvalidName)
+            {
+                MessageBox.Show(this, "テンプレート名が正しくありません。", "エラー",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            _viewModel.StatusMessage = result == SaveTemplateResult.Overwritten
+                ? $"テンプレートを上書きしました：{name}"
+                : $"テンプレートとして保存しました：{name}";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"テンプレートを保存できませんでした：{ex.Message}", "エラー",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>
+    /// テンプレートを選んで新しいプロジェクトを作る（未保存扱い）。
+    /// 参照メディアが見つからないクリップは配置だけ残るので、その旨を警告する。
+    /// テンプレートが壊れている場合はエラーを出して今のプロジェクトは変えない。
+    /// </summary>
+    private void NewFromTemplateMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new TemplateSelectDialog { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.SelectedTemplate is null)
+            return;
+        try
+        {
+            var result = _viewModel.NewProjectFromTemplate(dialog.SelectedTemplate.Path);
+            if (result.MissingMediaPaths.Count > 0)
+            {
+                var shown = result.MissingMediaPaths.Take(10).ToList();
+                var more = result.MissingMediaPaths.Count > 10
+                    ? $"\n他 {result.MissingMediaPaths.Count - 10} 件"
+                    : string.Empty;
+                MessageBox.Show(this,
+                    $"次のメディアファイルが見つからなかったため、該当クリップは配置だけ残しています。\n{string.Join("\n", shown)}{more}\n\n素材ファイルを元の場所に置き直すか、不要なクリップを削除してください。",
+                    "メディアが見つかりません", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"テンプレートから作成できませんでした：{ex.Message}", "エラー",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private async void ExportMenu_Click(object sender, RoutedEventArgs e)
     {
+        var presetStore = ExportPresetStore.Load();
+        var exportDialog = new ExportDialog(presetStore) { Owner = this };
+        if (exportDialog.ShowDialog() != true)
+            return;
+
         var dialog = new SaveFileDialog
         {
             Filter = "MP4 動画|*.mp4",
@@ -364,7 +458,7 @@ public partial class MainWindow : Window
         {
             var progress = new Progress<double>(p =>
                 _viewModel.StatusMessage = $"書き出し中… {p:P0}");
-            await _viewModel.ExportTimelineAsync(dialog.FileName, ExportSettings.Hd30, progress)
+            await _viewModel.ExportTimelineAsync(dialog.FileName, exportDialog.Settings, progress)
                 .ConfigureAwait(true);
             _viewModel.StatusMessage = $"書き出しました：{dialog.FileName}";
             MessageBox.Show($"書き出しました：{dialog.FileName}", "書き出し完了",
@@ -387,6 +481,61 @@ public partial class MainWindow : Window
     private void SplitMenu_Click(object sender, RoutedEventArgs e) => _viewModel.SplitAtPlayhead();
 
     private void DeleteMenu_Click(object sender, RoutedEventArgs e) => _viewModel.DeleteSelectedClip();
+
+    private void AddMarkerMenu_Click(object sender, RoutedEventArgs e) => _viewModel.AddMarkerAtPlayhead();
+
+    private void PrevMarkerMenu_Click(object sender, RoutedEventArgs e) => _viewModel.JumpToPreviousMarker();
+
+    private void NextMarkerMenu_Click(object sender, RoutedEventArgs e) => _viewModel.JumpToNextMarker();
+
+    /// <summary>
+    /// 歌詞ファイルを選び、設定ダイアログで開始位置・間隔・長さを決めて一括流し込みする。
+    /// ファイル選択・設定のどちらかをキャンセルすれば何もしない。
+    /// 読み込み失敗（ファイルが無い・空・文字コード不明）はエラーを出して何も配置しない。
+    /// </summary>
+    private void ImportLyricsMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var fileDialog = new OpenFileDialog
+        {
+            Filter = "テキストファイル|*.txt;*.lrc|すべてのファイル|*.*"
+        };
+        if (fileDialog.ShowDialog() != true)
+            return;
+
+        var dialog = new LyricsImportDialog(fileDialog.SafeFileName, _viewModel.PlayheadSeconds)
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        try
+        {
+            _viewModel.ImportLyrics(fileDialog.FileName, dialog.Options);
+        }
+        catch (LyricsImportException ex)
+        {
+            MessageBox.Show(ex.Message, "歌詞を流し込めませんでした",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"予期しないエラーが発生しました：{ex.Message}", "エラー",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void AddMarkerButton_Click(object sender, RoutedEventArgs e) => _viewModel.AddMarkerAtPlayhead();
+
+    private void PrevMarkerButton_Click(object sender, RoutedEventArgs e) => _viewModel.JumpToPreviousMarker();
+
+    private void NextMarkerButton_Click(object sender, RoutedEventArgs e) => _viewModel.JumpToNextMarker();
+
+    private void DeleteMarkerButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: MarkerRow row })
+            _viewModel.DeleteMarker(row);
+    }
 
     private void UndoMenu_Click(object sender, RoutedEventArgs e) => _viewModel.Undo();
 
