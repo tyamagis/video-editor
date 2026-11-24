@@ -260,11 +260,13 @@ public partial class TimelineControl : UserControl
 
         if (GridMode == GridMode.Beat)
         {
+            // ラベル重なり防止用の直前ラベル位置。2つの描画経路（検出拍／等間隔）で共有する。
+            // （2経路は return で排他のため、1つの変数で十分。）
+            var lastLabelX = -1000f;
             // 検出済みビートマップがあれば、その拍時刻を描く（BPMグリッドの代わり）。
             // 検出拍はオンセットに寄せてあるため、わずかなテンポの揺れもそのまま表示される。
             if (DetectedBeatMap is { BeatTimes.Count: > 0 } detected)
             {
-                var lastLabelX = -1000f;
                 for (var i = 0; i < detected.BeatTimes.Count; i++)
                 {
                     var t = detected.BeatTimes[i];
@@ -299,7 +301,6 @@ public partial class TimelineControl : UserControl
             // 毎フレーム List を確保しないよう、拍時刻は等間隔の計算で回す。
             // i は拍番号（0始まり）で、リスト版と一致する。
             var interval = BeatGridCalculator.BeatIntervalSeconds(Project.Bpm);
-            var lastLabelX = -1000f;
             for (var i = 0; ; i++)
             {
                 var t = Project.BeatOffsetSeconds + i * interval;
@@ -389,6 +390,7 @@ public partial class TimelineControl : UserControl
             ClipKind.Audio => new SKColor(0x4A, 0x8F, 0x5D),
             ClipKind.Text => new SKColor(0x8A, 0x6D, 0x3B),
             ClipKind.Image => new SKColor(0x6A, 0x5A, 0x9E),
+            ClipKind.Visualization => new SKColor(0x7E, 0x57, 0xC2),
             _ => new SKColor(0x55, 0x55, 0x55)
         };
 

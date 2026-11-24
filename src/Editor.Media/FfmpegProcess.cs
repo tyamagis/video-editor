@@ -12,18 +12,28 @@ public sealed record ProcessResult(int ExitCode, string StandardOutput, string S
 /// <summary>ffmpeg / ffprobe を Process として実行する。</summary>
 public static class FfmpegProcess
 {
-    public static async Task<ProcessResult> RunAsync(
-        string exePath, string arguments, CancellationToken ct = default)
-    {
-        var startInfo = new ProcessStartInfo
+    /// <summary>
+    /// ffmpeg / ffprobe 起動時の共通設定（ウィンドウなし・入出力リダイレクト）。
+    /// 長期プロセス（常駐ストリーム）と短期プロセスで設定を揃えるための1か所。
+    /// 標準入力へ送るプロセス（タイムライン書き出し）は redirectStandardInput: true を指定する。
+    /// </summary>
+    public static ProcessStartInfo CreateStartInfo(
+        string exePath, string arguments, bool redirectStandardInput = false)
+        => new()
         {
             FileName = exePath,
             Arguments = arguments,
             UseShellExecute = false,
             CreateNoWindow = true,
+            RedirectStandardInput = redirectStandardInput,
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+
+    public static async Task<ProcessResult> RunAsync(
+        string exePath, string arguments, CancellationToken ct = default)
+    {
+        var startInfo = CreateStartInfo(exePath, arguments);
 
         using var process = new Process { StartInfo = startInfo };
         process.Start();
@@ -49,15 +59,7 @@ public static class FfmpegProcess
         IProgress<double>? progress,
         CancellationToken ct = default)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = exePath,
-            Arguments = arguments,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
+        var startInfo = CreateStartInfo(exePath, arguments);
 
         using var process = new Process { StartInfo = startInfo };
         process.Start();

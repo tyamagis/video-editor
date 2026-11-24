@@ -15,7 +15,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Editor.Core\Editor.Core.csproj" />
     <ProjectReference Include="..\Editor.Media\Editor.Media.csproj" />
-    <ProjectReference Include="..\Editor.Audio\Editor.Audio.csproj" />
   </ItemGroup>
 
 </Project>

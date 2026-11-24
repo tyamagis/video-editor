@@ -284,14 +284,6 @@
     </Style>
     <Style TargetType="ScrollBar">
       <Setter Property="Background" Value="{StaticResource PanelBackground}" />
-      <Style.Triggers>
-        <Trigger Property="Orientation" Value="Vertical">
-          <Setter Property="Width" Value="12" />
-        </Trigger>
-        <Trigger Property="Orientation" Value="Horizontal">
-          <Setter Property="Height" Value="12" />
-        </Trigger>
-      </Style.Triggers>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ScrollBar">
@@ -319,6 +311,15 @@
           </ControlTemplate>
         </Setter.Value>
       </Setter>
+      <!-- プロパティ要素（Style.Triggers）はコンテンツの途中に置けない（MC3088）ため末尾に置く。 -->
+      <Style.Triggers>
+        <Trigger Property="Orientation" Value="Vertical">
+          <Setter Property="Width" Value="12" />
+        </Trigger>
+        <Trigger Property="Orientation" Value="Horizontal">
+          <Setter Property="Height" Value="12" />
+        </Trigger>
+      </Style.Triggers>
     </Style>
   </Application.Resources>
 </Application>

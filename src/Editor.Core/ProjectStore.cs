@@ -10,28 +10,30 @@ namespace Editor.Core;
 /// <summary>プロジェクトのJSON保存・読み込み。</summary>
 public static class ProjectStore
 {
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        WriteIndented = true
-    };
-
+    /// <summary>
+    /// プロジェクトを保存する。一時ファイル経由の原子的な置換で書くため、
+    /// 保存途中でクラッシュしても本ファイルが半端な内容になることはない。
+    /// 呼び出し元のプロジェクトは変えない（Version の書き込みはシリアライズ用のコピー側で行う）。
+    /// </summary>
     public static void Save(string path, EditorProject project)
     {
-        project.Version = EditorProject.CurrentVersion;
-        var json = JsonSerializer.Serialize(project, Options);
-        File.WriteAllText(path, json);
+        var json = JsonSerializer.Serialize(
+            project.WithVersion(EditorProject.CurrentVersion), JsonDefaults.Indented);
+        AtomicFile.WriteAllText(path, json);
     }
 
-    /// <summary>プロジェクトを JSON 文字列にする（アンドゥ用スナップショット）。</summary>
+    /// <summary>
+    /// プロジェクトを JSON 文字列にする（アンドゥ用スナップショット）。
+    /// 読み取り専用の操作であり、呼び出し元のプロジェクトは変えない
+    /// （Version の書き込みはシリアライズ用のコピー側で行う）。
+    /// </summary>
     public static string Serialize(EditorProject project)
-    {
-        project.Version = EditorProject.CurrentVersion;
-        return JsonSerializer.Serialize(project, Options);
-    }
+        => JsonSerializer.Serialize(
+            project.WithVersion(EditorProject.CurrentVersion), JsonDefaults.Indented);
 
     /// <summary>JSON 文字列からプロジェクトを復元する（アンドゥ用）。同じ版で作られたものだけを扱う。</summary>
     public static EditorProject Deserialize(string json)
-        => JsonSerializer.Deserialize<EditorProject>(json, Options)
+        => JsonSerializer.Deserialize<EditorProject>(json, JsonDefaults.Indented)
             ?? throw new InvalidDataException("プロジェクトを復元できませんでした。");
 
     public static EditorProject Load(string path)
@@ -52,7 +54,7 @@ public static class ProjectStore
             throw new InvalidDataException(
                 $"プロジェクトファイルの版 ({version}) がこのソフトの対応版 ({EditorProject.CurrentVersion}) より新しいです。");
 
-        var project = JsonSerializer.Deserialize<EditorProject>(json, Options)
+        var project = JsonSerializer.Deserialize<EditorProject>(json, JsonDefaults.Indented)
             ?? throw new InvalidDataException("プロジェクトファイルを読み込めませんでした。");
 
         if (version < EditorProject.CurrentVersion)

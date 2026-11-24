@@ -3,6 +3,7 @@
 // ビットマップの所有権は PreviewRenderer 側にある（ここでは破棄しない）。
 
 using System.Windows.Controls;
+using Editor.Render;
 using SkiaSharp;
 using SkiaSharp.Views.Desktop;
 using SkiaSharp.Views.WPF;
@@ -78,7 +79,11 @@ public partial class PreviewControl : UserControl
         }
     }
 
-    /// <summary>スペクトルを映像の下端に棒グラフで重ねる。</summary>
+    /// <summary>
+    /// スペクトルを映像の下端に棒グラフで重ねる。
+    /// 棒の描き方は可視化クリップと同じ共通処理（VisualizationRenderer.DrawSpectrumBars）。
+    /// 帯の範囲・色はオーバーレイ専用の既定値（下端 22% の帯、シアン）。
+    /// </summary>
     private static void DrawSpectrumOverlay(SKCanvas canvas, SKRect dest, double[] bands)
     {
         var stripHeight = dest.Height * 0.22f;
@@ -86,28 +91,18 @@ public partial class PreviewControl : UserControl
         using var bgPaint = new SKPaint { Color = new SKColor(0, 0, 0, 110) };
         canvas.DrawRect(strip, bgPaint);
 
-        var count = bands.Length;
-        const float gap = 2f;
-        var barWidth = (strip.Width - gap * (count + 1)) / count;
-        if (barWidth <= 0)
-            return;
-        using var barPaint = new SKPaint
-        {
-            Color = new SKColor(0x22, 0xD3, 0xEE, 220),
-            IsAntialias = true
-        };
-        for (var i = 0; i < count; i++)
-        {
-            var value = Math.Clamp(bands[i], 0, 1);
-            var h = (float)(value * (stripHeight - 6));
-            if (h <= 0)
-                continue;
-            var x = strip.Left + gap + i * (barWidth + gap);
-            canvas.DrawRect(new SKRect(x, strip.Bottom - 3 - h, x + barWidth, strip.Bottom - 3), barPaint);
-        }
+        var barArea = new SKRect(
+            strip.Left, strip.Bottom - 3 - (stripHeight - 6),
+            strip.Right, strip.Bottom - 3);
+        VisualizationRenderer.DrawSpectrumBars(
+            canvas, barArea, bands, new SKColor(0x22, 0xD3, 0xEE, 220));
     }
 
-    /// <summary>リサジュー図形（左チャンネル＝横、右チャンネル＝縦）を右上に重ねる。</summary>
+    /// <summary>
+    /// リサジュー図形（左チャンネル＝横、右チャンネル＝縦）を右上に重ねる。
+    /// 枠・十字線と軌跡パスは可視化クリップと同じ共通処理。
+    /// 位置・大きさ・色はオーバーレイ専用の既定値（右上 22% の正方形、マゼンタ）。
+    /// </summary>
     private static void DrawLissajousOverlay(SKCanvas canvas, SKRect dest, (float[] Left, float[] Right) window)
     {
         var (left, right) = window;
@@ -120,30 +115,11 @@ public partial class PreviewControl : UserControl
         using var bgPaint = new SKPaint { Color = new SKColor(0, 0, 0, 110) };
         canvas.DrawRect(square, bgPaint);
 
-        using var framePaint = new SKPaint
-        {
-            Color = new SKColor(255, 255, 255, 60),
-            StrokeWidth = 1,
-            IsAntialias = true,
-            Style = SKPaintStyle.Stroke
-        };
-        canvas.DrawRect(square, framePaint);
-        var cx = square.MidX;
-        var cy = square.MidY;
-        canvas.DrawLine(cx, square.Top, cx, square.Bottom, framePaint);
-        canvas.DrawLine(square.Left, cy, square.Right, cy, framePaint);
+        VisualizationRenderer.DrawLissajousFrame(canvas, square, new SKColor(255, 255, 255, 60));
 
         var half = size / 2f * 0.9f;
-        using var path = new SKPath();
-        for (var i = 0; i < count; i++)
-        {
-            var x = cx + Math.Clamp(left[i], -1f, 1f) * half;
-            var y = cy - Math.Clamp(right[i], -1f, 1f) * half;
-            if (i == 0)
-                path.MoveTo(x, y);
-            else
-                path.LineTo(x, y);
-        }
+        using var path = VisualizationRenderer.BuildLissajousPath(
+            left, right, 0, count, square.MidX, square.MidY, half, 1f);
         using var linePaint = new SKPaint
         {
             Color = new SKColor(0xFF, 0x2E, 0x88, 220),

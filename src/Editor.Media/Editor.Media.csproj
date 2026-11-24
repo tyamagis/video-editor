@@ -13,8 +13,4 @@
     <PackageReference Include="FFMpegCore" Version="5.1.0" />
   </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\Editor.Core\Editor.Core.csproj" />
-  </ItemGroup>
-
 </Project>

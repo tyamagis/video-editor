@@ -23,12 +23,20 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Loaded += OnLoaded;
+        Closing += MainWindow_Closing;
         KeyDown += MainWindow_KeyDown;
+    }
+
+    /// <summary>終了時に自動保存する（未保存の編集が残っていれば、自動保存ファイルに残す）。</summary>
+    private void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        _viewModel?.SaveAutosaveNow();
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         _viewModel = (MainViewModel)DataContext;
+        BuildAutosaveIntervalMenu();
 
         TimelineControl.Project = _viewModel.Project;
         TimelineControl.GridMode = _viewModel.GridMode;
@@ -138,7 +146,9 @@ public partial class MainWindow : Window
         // テキスト入力中・コンボボックス操作中・チェックボックス操作中はショートカットを無効化する。
         if (Keyboard.FocusedElement is TextBox or ComboBox or CheckBox)
             return;
-        if (e.Key == Key.S)
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.S)
+            SaveProjectOrShowDialog();
+        else if (e.Key == Key.S)
             _viewModel.SplitAtPlayhead();
         else if (e.Key == Key.Delete)
             _viewModel.DeleteSelectedClip();
@@ -225,15 +235,102 @@ public partial class MainWindow : Window
             new DataObject(DataFormats.StringFormat, item.SourcePath), DragDropEffects.Copy);
     }
 
-    private void SaveMenu_Click(object sender, RoutedEventArgs e)
+    private void SaveMenu_Click(object sender, RoutedEventArgs e) => SaveProjectOrShowDialog();
+
+    /// <summary>
+    /// プロジェクトを保存する。保存先が決まっていればそのまま保存し（ダイアログは出さない）、
+    /// 未保存のプロジェクトの場合は名前を付けて保存のダイアログを出す。
+    /// </summary>
+    private void SaveProjectOrShowDialog()
+    {
+        if (_viewModel.CurrentProjectPath is not null)
+        {
+            try
+            {
+                _viewModel.SaveProject(_viewModel.CurrentProjectPath);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"保存できませんでした：{ex.Message}", "エラー",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            return;
+        }
+        ShowSaveDialogAndSave();
+    }
+
+    private void SaveAsMenu_Click(object sender, RoutedEventArgs e) => ShowSaveDialogAndSave();
+
+    /// <summary>名前を付けて保存のダイアログを出し、選ばれた場所に保存する。</summary>
+    private void ShowSaveDialogAndSave()
     {
         var dialog = new SaveFileDialog
         {
             Filter = "VideoEditor プロジェクト|*.veproj",
             FileName = $"{_viewModel.Project.Name}.veproj"
         };
-        if (dialog.ShowDialog() == true)
+        if (dialog.ShowDialog() != true)
+            return;
+        try
+        {
             _viewModel.SaveProject(dialog.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"保存できませんでした：{ex.Message}", "エラー",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>自動保存ファイルの内容でプロジェクトを復旧する。</summary>
+    private void RecoverAutosaveMenu_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _viewModel.RecoverFromAutosave();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"復旧できませんでした：{ex.Message}", "エラー",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>自動保存ファイルを破棄する（復旧しないと決めたとき）。</summary>
+    private void DiscardAutosaveMenu_Click(object sender, RoutedEventArgs e)
+    {
+        _viewModel.DiscardAutosave();
+    }
+
+    /// <summary>自動保存の間隔メニュー（1/2/5/10/15分）を作る。今の間隔にチェックを付ける。</summary>
+    private void BuildAutosaveIntervalMenu()
+    {
+        foreach (var minutes in new[] { 1, 2, 5, 10, 15 })
+        {
+            var item = new MenuItem
+            {
+                Header = $"{minutes}分",
+                Tag = minutes,
+                IsCheckable = true,
+                IsChecked = _viewModel.AutosaveIntervalMinutes == minutes
+            };
+            item.Click += (_, _) =>
+            {
+                _viewModel.SetAutosaveIntervalMinutes((int)item.Tag);
+                RefreshAutosaveIntervalChecks();
+            };
+            AutosaveIntervalMenu.Items.Add(item);
+        }
+    }
+
+    /// <summary>自動保存の間隔メニューのチェックを、今の間隔に合わせ直す。</summary>
+    private void RefreshAutosaveIntervalChecks()
+    {
+        foreach (var obj in AutosaveIntervalMenu.Items)
+        {
+            if (obj is MenuItem item && item.Tag is int minutes)
+                item.IsChecked = _viewModel.AutosaveIntervalMinutes == minutes;
+        }
     }
 
     private void LoadMenu_Click(object sender, RoutedEventArgs e)
@@ -306,6 +403,9 @@ public partial class MainWindow : Window
 
     private void AddEffectButton_Click(object sender, RoutedEventArgs e)
         => _viewModel.AddEffect(_viewModel.NewEffectKind);
+
+    private void AddVisualizationClipButton_Click(object sender, RoutedEventArgs e)
+        => _viewModel.AddVisualizationClip(_viewModel.NewVisualizationKind);
 
     private void DeleteEffectButton_Click(object sender, RoutedEventArgs e)
     {

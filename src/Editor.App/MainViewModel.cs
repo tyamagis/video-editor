@@ -17,430 +17,15 @@ using SkiaSharp;
 
 namespace Editor.App;
 
-/// <summary>素材プールに表示する1素材。</summary>
-public sealed class MediaItem
-{
-    public required string SourcePath { get; init; }
-    public required MediaInfo Info { get; init; }
-    public string Name => Path.GetFileName(SourcePath);
-    public string Display => $"{Name}  ({Info.Duration:mm\\:ss}, {Info.Width}x{Info.Height})";
-}
-
-/// <summary>キーフレーム1行の表示・編集用ラッパー。モデルの Keyframe を直接書き換える。</summary>
-public sealed class KeyframeRow : INotifyPropertyChanged
-{
-    private readonly MainViewModel _owner;
-    private readonly Clip _clip;
-    private readonly string _parameter;
-
-    public KeyframeRow(MainViewModel owner, Clip clip, string parameter, Keyframe keyframe)
-    {
-        _owner = owner;
-        _clip = clip;
-        _parameter = parameter;
-        Keyframe = keyframe;
-    }
-
-    public Keyframe Keyframe { get; }
-
-    /// <summary>クリップ先頭からの相対秒。0〜クリップの長さに丸める。</summary>
-    public double TimeSeconds
-    {
-        get => Keyframe.TimeSeconds;
-        set
-        {
-            var clamped = Math.Clamp(value, 0, Math.Max(0, _clip.DurationSeconds));
-            if (Math.Abs(Keyframe.TimeSeconds - clamped) < 1e-9)
-                return;
-            Keyframe.TimeSeconds = clamped;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>値。不透明度だけ 0〜1 に丸める（描画側でも丸めている）。</summary>
-    public double Value
-    {
-        get => Keyframe.Value;
-        set
-        {
-            var clamped = _parameter == "Opacity" ? Math.Clamp(value, 0, 1) : value;
-            if (Math.Abs(Keyframe.Value - clamped) < 1e-9)
-                return;
-            Keyframe.Value = clamped;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>
-    /// 補間方法。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。
-    /// （代入の前なら Keyframe はまだ旧値なので、BeginEdit のスナップショットは正しい。）
-    /// </summary>
-    public Interpolation Interpolation
-    {
-        get => Keyframe.Interpolation;
-        set
-        {
-            if (Keyframe.Interpolation == value)
-                return;
-            _owner.BeginEdit();
-            Keyframe.Interpolation = value;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    private void OnPropertyChanged([CallerMemberName] string? name = null)
-        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-}
-
-/// <summary>エフェクト1つの表示・編集用ラッパー。モデルの ClipEffect を直接書き換える。</summary>
-public sealed class EffectRow : INotifyPropertyChanged
-{
-    private readonly MainViewModel _owner;
-
-    public EffectRow(MainViewModel owner, ClipEffect effect)
-    {
-        _owner = owner;
-        Effect = effect;
-    }
-
-    public ClipEffect Effect { get; }
-
-    /// <summary>
-    /// 種類。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。
-    /// （代入の前なら Effect はまだ旧値なので、BeginEdit のスナップショットは正しい。）
-    /// 種類が変わると表示するパラメータ欄も変わるため、関連プロパティも通知する。
-    /// </summary>
-    public EffectKind Kind
-    {
-        get => Effect.Kind;
-        set
-        {
-            if (Effect.Kind == value)
-                return;
-            _owner.BeginEdit();
-            Effect.Kind = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(AmountLabel));
-            OnPropertyChanged(nameof(RadiusLabel));
-            OnPropertyChanged(nameof(ShowRadius));
-            OnPropertyChanged(nameof(ShowKeyColor));
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>主パラメータ。種類ごとに意味と範囲が違う（ClipEffect の説明を参照）。</summary>
-    public double Amount
-    {
-        get => Effect.Amount;
-        set
-        {
-            var clamped = ClampAmount(Effect.Kind, value);
-            if (Math.Abs(Effect.Amount - clamped) < 1e-9)
-                return;
-            Effect.Amount = clamped;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>副パラメータ（グロー：ぼかし半径、ワープ：波長、クロマキー：なめらかさ）。</summary>
-    public double Radius
-    {
-        get => Effect.Radius;
-        set
-        {
-            var clamped = ClampRadius(Effect.Kind, value);
-            if (Math.Abs(Effect.Radius - clamped) < 1e-9)
-                return;
-            Effect.Radius = clamped;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>クロマキーのキー色（"#00FF00" など）。離散的な変更なので代入前にスナップショットを取る。</summary>
-    public string KeyColorHex
-    {
-        get => Effect.KeyColorHex;
-        set
-        {
-            if (Effect.KeyColorHex == value)
-                return;
-            _owner.BeginEdit();
-            Effect.KeyColorHex = value;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>主パラメータ欄の見出し（種類ごと）。</summary>
-    public string AmountLabel => Effect.Kind switch
-    {
-        EffectKind.Blur => "半径",
-        EffectKind.Glow => "強さ",
-        EffectKind.RgbShift => "ずれ",
-        EffectKind.Slice => "ずれ幅",
-        EffectKind.Warp => "振幅",
-        EffectKind.ChromaKey => "しきい値",
-        _ => "量"
-    };
-
-    /// <summary>副パラメータ欄の見出し（種類ごと）。</summary>
-    public string RadiusLabel => Effect.Kind switch
-    {
-        EffectKind.Glow => "ぼかし半径",
-        EffectKind.Warp => "波長",
-        EffectKind.ChromaKey => "なめらかさ",
-        _ => string.Empty
-    };
-
-    /// <summary>副パラメータ欄を表示するか（グロー・ワープ・クロマキーだけ使う）。</summary>
-    public bool ShowRadius => Effect.Kind is EffectKind.Glow or EffectKind.Warp or EffectKind.ChromaKey;
-
-    /// <summary>キー色欄を表示するか（クロマキーだけ使う）。</summary>
-    public bool ShowKeyColor => Effect.Kind == EffectKind.ChromaKey;
-
-    private static double ClampAmount(EffectKind kind, double value) => kind switch
-    {
-        EffectKind.Blur => Math.Clamp(value, 0, 100),
-        EffectKind.Glow => Math.Clamp(value, 0, 1),
-        EffectKind.RgbShift => Math.Clamp(value, 0, 50),
-        EffectKind.Slice => Math.Clamp(value, 0, 100),
-        EffectKind.Warp => Math.Clamp(value, 0, 100),
-        EffectKind.ChromaKey => Math.Clamp(value, 0, 1),
-        _ => value
-    };
-
-    private static double ClampRadius(EffectKind kind, double value) => kind switch
-    {
-        EffectKind.Glow => Math.Clamp(value, 1, 100),
-        EffectKind.Warp => Math.Clamp(value, 20, 1000),
-        EffectKind.ChromaKey => Math.Clamp(value, 0, 1),
-        _ => value
-    };
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    private void OnPropertyChanged([CallerMemberName] string? name = null)
-        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-}
-
-/// <summary>音連動バインド1つの表示・編集用ラッパー。モデルの AudioBinding を直接書き換える。</summary>
-public sealed class AudioBindingRow : INotifyPropertyChanged
-{
-    private readonly MainViewModel _owner;
-
-    public AudioBindingRow(MainViewModel owner, AudioBinding binding)
-    {
-        _owner = owner;
-        Binding = binding;
-    }
-
-    public AudioBinding Binding { get; }
-
-    /// <summary>動かすパラメータ。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。</summary>
-    public string ParameterName
-    {
-        get => Binding.ParameterName;
-        set
-        {
-            if (Binding.ParameterName == value)
-                return;
-            _owner.BeginEdit();
-            Binding.ParameterName = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(ParameterLabel));
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>パラメータの表示名。</summary>
-    public string ParameterLabel => ParameterName switch
-    {
-        "Opacity" => "不透明度",
-        "Scale" => "拡大率",
-        "Rotation" => "回転",
-        "PositionX" => "位置 X",
-        "PositionY" => "位置 Y",
-        _ => ParameterName
-    };
-
-    /// <summary>音源クリップの Id。離散的な変更なので、代入前にスナップショットを取る。変えたら解析を走らせる。</summary>
-    public string SourceClipId
-    {
-        get => Binding.SourceClipId;
-        set
-        {
-            if (Binding.SourceClipId == value)
-                return;
-            _owner.BeginEdit();
-            Binding.SourceClipId = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(SourceClipName));
-            _owner.RequestBindingSourceAnalysis(Binding);
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>音源クリップの名前（無効ならその旨）。</summary>
-    public string SourceClipName => _owner.GetAudioClipName(Binding.SourceClipId);
-
-    /// <summary>周波数帯の下限（Hz、1〜上限）。</summary>
-    public double LowHz
-    {
-        get => Binding.LowHz;
-        set
-        {
-            var clamped = Math.Clamp(value, 1, Math.Max(1, Binding.HighHz));
-            if (Math.Abs(Binding.LowHz - clamped) < 1e-9)
-                return;
-            Binding.LowHz = clamped;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>周波数帯の上限（Hz、下限〜20000）。</summary>
-    public double HighHz
-    {
-        get => Binding.HighHz;
-        set
-        {
-            var clamped = Math.Clamp(value, Math.Max(1, Binding.LowHz), 20000);
-            if (Math.Abs(Binding.HighHz - clamped) < 1e-9)
-                return;
-            Binding.HighHz = clamped;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>帯域エネルギー 0.0 のときの出力値。</summary>
-    public double MinValue
-    {
-        get => Binding.MinValue;
-        set
-        {
-            if (Math.Abs(Binding.MinValue - value) < 1e-9)
-                return;
-            Binding.MinValue = value;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>帯域エネルギー 1.0 のときの出力値。</summary>
-    public double MaxValue
-    {
-        get => Binding.MaxValue;
-        set
-        {
-            if (Math.Abs(Binding.MaxValue - value) < 1e-9)
-                return;
-            Binding.MaxValue = value;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>感度（0〜10）。</summary>
-    public double Gain
-    {
-        get => Binding.Gain;
-        set
-        {
-            var clamped = Math.Clamp(value, 0, 10);
-            if (Math.Abs(Binding.Gain - clamped) < 1e-9)
-                return;
-            Binding.Gain = clamped;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>しきい値（0〜1）。これ以下の帯域エネルギーは 0 とみなす。</summary>
-    public double Threshold
-    {
-        get => Binding.Threshold;
-        set
-        {
-            var clamped = Math.Clamp(value, 0, 1);
-            if (Math.Abs(Binding.Threshold - clamped) < 1e-9)
-                return;
-            Binding.Threshold = clamped;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>反転する（音が大きいほど出力が小さくなる）。離散的な変更なので代入前にスナップショットを取る。</summary>
-    public bool Invert
-    {
-        get => Binding.Invert;
-        set
-        {
-            if (Binding.Invert == value)
-                return;
-            _owner.BeginEdit();
-            Binding.Invert = value;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>キーフレーム値との合成方法。離散的な変更なので代入前にスナップショットを取る。</summary>
-    public AudioBindCombine Combine
-    {
-        get => Binding.Combine;
-        set
-        {
-            if (Binding.Combine == value)
-                return;
-            _owner.BeginEdit();
-            Binding.Combine = value;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    /// <summary>有効か。離散的な変更なので代入前にスナップショットを取る。</summary>
-    public bool Enabled
-    {
-        get => Binding.Enabled;
-        set
-        {
-            if (Binding.Enabled == value)
-                return;
-            _owner.BeginEdit();
-            Binding.Enabled = value;
-            OnPropertyChanged();
-            _owner.NotifyTimelineChanged();
-        }
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    private void OnPropertyChanged([CallerMemberName] string? name = null)
-        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-}
-
-public sealed class MainViewModel : INotifyPropertyChanged
+public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost, IDetectionHost
 {
     private readonly MediaProbe _mediaProbe;
-    private readonly ThumbnailService _thumbnailService;
     private readonly ExportService _exportService;
-    private readonly WaveformReader _waveformReader;
+    private readonly WaveformCache _waveformCache;
     private readonly PreviewRenderer _previewRenderer;
     private readonly ITimelineExporter _timelineExporter;
     private readonly FfmpegSettings _ffmpegSettings;
-    private readonly AudioBeatAnalyzer _beatAnalyzer;
     private readonly AudioBandEnergyProvider _bandProvider;
-    private readonly SilenceDetector _silenceDetector = new();
     private readonly Dispatcher _uiDispatcher;
 
     private readonly DispatcherTimer _playTimer;
@@ -468,50 +53,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>音声解析の実行中タスク（クリップId → タスク）。同じクリップの重複した解析を1回にまとめる。</summary>
     private readonly Dictionary<string, Task> _analysisTasks = new();
 
-    /// <summary>無音検出の実行中か（実行中は検出ボタンを無効化する）。</summary>
-    private bool _isDetectingSilence;
+    /// <summary>Undo/Redo・保存／読込・自動保存のセッション状態。コンストラクタで作る。</summary>
+    private readonly ProjectSession _session;
 
-    /// <summary>検出済みで未適用の無音区間（クリップのイン点からの相対秒）。</summary>
-    private SilenceDetectionResult? _pendingSilence;
-
-    /// <summary>保留中の無音検出の対象クリップ。プロジェクトから無くなれば適用できない。</summary>
-    private Clip? _pendingSilenceClip;
-
-    /// <summary>保留中の無音検出時のクリップのイン点（秒）。検出後にトリミングされていたら適用しない。</summary>
-    private double _pendingSilenceInPoint;
-
-    /// <summary>保留中の無音検出時のクリップの長さ（秒）。検出後に長さが変わっていたら適用しない。</summary>
-    private double _pendingSilenceDuration;
-
-    /// <summary>無音検出のしきい値（dBFS）。既定 -40dB。</summary>
-    private double _silenceThresholdDb = -40;
-
-    /// <summary>無音区間とみなす最短の長さ（秒）。既定 0.5 秒。</summary>
-    private double _silenceMinSeconds = 0.5;
-
-    /// <summary>無音区間の前後に残す余白（秒）。既定 0.1 秒。</summary>
-    private double _silenceMarginSeconds = 0.1;
-
-    /// <summary>BPM検出の実行中か（実行中は検出ボタンを無効化する）。</summary>
-    private bool _isDetectingBpm;
-
-    /// <summary>検出済みで未適用の結果（素材内時刻）。適用時にタイムライン時刻へ変換する。</summary>
-    private BeatDetectionResult? _pendingDetection;
-
-    /// <summary>保留中の検出結果の対象クリップ。プロジェクトから無くなれば適用できない。</summary>
-    private Clip? _pendingDetectionClip;
-
-    /// <summary>適用済みの検出ビートマップ（タイムライン時刻）。拍グリッド表示が使う。</summary>
-    private BeatMap? _detectedBeatMap;
-
-    /// <summary>アンドゥ／リドゥの上限（スナップショット件数）。</summary>
-    private const int MaxUndoSteps = 50;
-
-    /// <summary>アンドゥ用スナップショット（プロジェクト全体のJSON）。末尾が最新の変更前状態。</summary>
-    private readonly List<string> _undoStack = new();
-
-    /// <summary>リドゥ用スナップショット（プロジェクト全体のJSON）。末尾が最新の変更前状態。</summary>
-    private readonly List<string> _redoStack = new();
+    /// <summary>BPM検出・無音カットの「検出→保留→検証→適用」状態機械。コンストラクタで作る。</summary>
+    private readonly DetectionService _detection;
 
     /// <summary>波形データのキャッシュ（素材パス → 波形）。表示切替で消さない。</summary>
     public Dictionary<string, WaveformData> Waveforms { get; } = new();
@@ -523,33 +69,47 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public MainViewModel(
         MediaProbe mediaProbe,
-        ThumbnailService thumbnailService,
         ExportService exportService,
-        WaveformReader waveformReader,
+        WaveformCache waveformCache,
         PreviewRenderer previewRenderer,
         ITimelineExporter timelineExporter,
         FfmpegSettings ffmpegSettings,
         AudioBeatAnalyzer beatAnalyzer,
-        AudioBandEnergyProvider bandProvider)
+        AudioBandEnergyProvider bandProvider,
+        SilenceDetector silenceDetector)
     {
         _mediaProbe = mediaProbe;
-        _thumbnailService = thumbnailService;
         _exportService = exportService;
-        _waveformReader = waveformReader;
+        _waveformCache = waveformCache;
         _previewRenderer = previewRenderer;
         _timelineExporter = timelineExporter;
         _ffmpegSettings = ffmpegSettings;
-        _beatAnalyzer = beatAnalyzer;
         _bandProvider = bandProvider;
         _uiDispatcher = Dispatcher.CurrentDispatcher;
 
         _playTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.0 / 30) };
         _playTimer.Tick += (_, _) => AdvancePlayhead();
 
+        // セッション状態（Undo/Redo・保存／読込・自動保存）と検出状態機械は
+        // 専用クラスへ分離。ホスト（この ViewModel）に委譲する操作は
+        // インターフェース経由で渡す。どちらも UI スレッドで作る
+        // （ProjectSession は自動保存タイマーを作るため）。
+        _session = new ProjectSession(this);
+        _session.PropertyChanged += (_, e) => OnPropertyChanged(e.PropertyName);
+        _detection = new DetectionService(beatAnalyzer, silenceDetector, this);
+        _detection.PropertyChanged += (_, e) =>
+        {
+            OnPropertyChanged(e.PropertyName);
+            if (e.PropertyName == nameof(DetectionService.IsDetectingSilence))
+                OnPropertyChanged(nameof(CanSilenceCut));
+        };
+
         PlayPauseCommand = new RelayCommand(_ => IsPlaying = !IsPlaying);
         SplitCommand = new RelayCommand(_ => SplitAtPlayhead());
         DeleteClipCommand = new RelayCommand(_ => DeleteSelectedClip(), _ => SelectedClip is not null);
         AddTextClipCommand = new RelayCommand(_ => AddTextClip("歌詞テロップ"));
+
+        RefreshKeyframeParameterOptions();
     }
 
     public EditorProject Project
@@ -558,7 +118,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set
         {
             // プロジェクトが変われば検出結果は合わなくなるので消す。
-            ClearDetectionState();
+            _detection.Clear();
             lock (_analysisTasks)
             {
                 _analysisTasks.Clear(); // 解析タスクも新しいプロジェクトのクリップIdで取り直す。
@@ -599,12 +159,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(IsAudioClipSelected));
             OnPropertyChanged(nameof(IsVideoClipSelected));
             OnPropertyChanged(nameof(HasVisualEffects));
+            OnPropertyChanged(nameof(CanHaveAudioBindings));
             OnPropertyChanged(nameof(HasAudioClip));
             OnPropertyChanged(nameof(CanSilenceCut));
             OnPropertyChanged(nameof(SelectedClipNoiseReductionEnabled));
             OnPropertyChanged(nameof(SelectedClipNoiseReductionStrength));
             OnPropertyChanged(nameof(CanAddKeyframeAtPlayhead));
             OnPropertyChanged(nameof(AudioBindingHint));
+            OnPropertyChanged(nameof(IsVisualizationClipSelected));
+            OnPropertyChanged(nameof(VisualizationHint));
+            OnPropertyChanged(nameof(SelectedVisualizationKind));
+            OnPropertyChanged(nameof(SelectedVisualizationSourceClipId));
+            OnPropertyChanged(nameof(SelectedVisualizationColorHex));
+            OnPropertyChanged(nameof(SelectedVisualizationLowHz));
+            OnPropertyChanged(nameof(SelectedVisualizationHighHz));
+            OnPropertyChanged(nameof(SelectedVisualizationBandCount));
+            OnPropertyChanged(nameof(SelectedVisualizationGain));
+            OnPropertyChanged(nameof(SelectedVisualizationLogarithmic));
+            OnPropertyChanged(nameof(SelectedVisualizationLineWidth));
+            OnPropertyChanged(nameof(SelectedVisualizationWindowSeconds));
+            OnPropertyChanged(nameof(SelectedVisualizationTrailSeconds));
+            OnPropertyChanged(nameof(ShowSpectrumSettings));
+            OnPropertyChanged(nameof(ShowWaveformSettings));
+            OnPropertyChanged(nameof(ShowLissajousSettings));
             RefreshKeyframeRows();
             RefreshEffectRows();
             RefreshAudioBindingRows();
@@ -620,8 +197,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>選択中クリップが映像クリップか（無音カットで映像も一緒に切れる旨の表示に使う）。</summary>
     public bool IsVideoClipSelected => SelectedClip?.Kind == ClipKind.Video;
 
-    /// <summary>映像エフェクト欄を有効にするか（音声クリップでは無効）。</summary>
-    public bool HasVisualEffects => SelectedClip is not null && SelectedClip.Kind != ClipKind.Audio;
+    /// <summary>映像エフェクト欄を有効にするか（音声クリップと可視化クリップでは無効。可視化クリップの描画は専用の設定欄で調整する）。</summary>
+    public bool HasVisualEffects => SelectedClip is not null
+        && SelectedClip.Kind != ClipKind.Audio
+        && SelectedClip.Kind != ClipKind.Visualization;
+
+    /// <summary>音連動バインド欄を有効にするか（音声クリップ自体には付けられない。可視化クリップには付けられる）。</summary>
+    public bool CanHaveAudioBindings => SelectedClip is not null && SelectedClip.Kind != ClipKind.Audio;
+
+    /// <summary>選択中クリップが可視化クリップか（可視化設定欄の表示に使う）。</summary>
+    public bool IsVisualizationClipSelected => SelectedClip?.Kind == ClipKind.Visualization;
+
+    /// <summary>スペクトル用の設定欄を表示するか（可視化クリップで種類がスペクトルのとき）。</summary>
+    public bool ShowSpectrumSettings => SelectedClip?.Visualization?.Kind == VisualizationKind.Spectrum;
+
+    /// <summary>波形用の設定欄を表示するか（可視化クリップで種類が波形のとき）。</summary>
+    public bool ShowWaveformSettings => SelectedClip?.Visualization?.Kind == VisualizationKind.Waveform;
+
+    /// <summary>リサジュー用の設定欄を表示するか（可視化クリップで種類がリサジューのとき）。</summary>
+    public bool ShowLissajousSettings => SelectedClip?.Visualization?.Kind == VisualizationKind.Lissajous;
 
     /// <summary>音声つきクリップ（音声または映像で、素材パスがある）が選択されているか。無音カット・ノイズ除去欄の有効化に使う。</summary>
     public bool HasAudioClip => SelectedClip is not null
@@ -655,6 +249,226 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 return;
             SelectedClip.NoiseReductionStrength = Math.Clamp(value, 0.0, 1.0);
             OnPropertyChanged();
+        }
+    }
+
+    // ---- 音の可視化クリップ（設計プラン 4章） ----
+
+    /// <summary>可視化の状態についての説明文（解析中・解析済み・音源なしなど）。</summary>
+    public string VisualizationHint
+    {
+        get
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null)
+                return string.Empty;
+            if (string.IsNullOrEmpty(viz.SourceClipId))
+                return "音源が選ばれていません。音声クリップをタイムラインに置いて、音源を選んでください。";
+            var source = Project.Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == viz.SourceClipId);
+            if (source is null)
+                return "音源クリップが見つかりません（削除された可能性があります）。";
+            return _bandProvider.IsAnalyzed(viz.SourceClipId)
+                ? $"音源：{source.Name}（解析済み）"
+                : $"音源：{source.Name}（解析中…終わるまで描かれません）";
+        }
+    }
+
+    /// <summary>選択中可視化クリップの種類。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。</summary>
+    public VisualizationKind SelectedVisualizationKind
+    {
+        get => SelectedClip?.Visualization?.Kind ?? VisualizationKind.Spectrum;
+        set
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null || viz.Kind == value)
+                return;
+            BeginEdit();
+            viz.Kind = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ShowSpectrumSettings));
+            OnPropertyChanged(nameof(ShowWaveformSettings));
+            OnPropertyChanged(nameof(ShowLissajousSettings));
+            RefreshKeyframeRows(); // 種類が変わるとキーフレームで選べる項目も変わる。
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>選択中可視化クリップの音源クリップの Id。離散的な変更なので、代入前にスナップショットを取る。変えたら解析を走らせる。</summary>
+    public string SelectedVisualizationSourceClipId
+    {
+        get => SelectedClip?.Visualization?.SourceClipId ?? string.Empty;
+        set
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null)
+                return;
+            value ??= string.Empty;
+            if (viz.SourceClipId == value)
+                return;
+            BeginEdit();
+            viz.SourceClipId = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(VisualizationHint));
+            RequestVisualizationAnalysis(viz);
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>選択中可視化クリップの描画色（"#22D3EE" など）。離散的な変更なので、代入前にスナップショットを取る。</summary>
+    public string SelectedVisualizationColorHex
+    {
+        get => SelectedClip?.Visualization?.ColorHex ?? "#22D3EE";
+        set
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null || viz.ColorHex == value)
+                return;
+            BeginEdit();
+            viz.ColorHex = value;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>スペクトルの対象帯域の下限（Hz、1〜上限）。</summary>
+    public double SelectedVisualizationLowHz
+    {
+        get => SelectedClip?.Visualization?.LowHz ?? 20;
+        set
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null)
+                return;
+            var clamped = Math.Clamp(value, 1, Math.Max(1, viz.HighHz));
+            if (Math.Abs(viz.LowHz - clamped) < 1e-9)
+                return;
+            viz.LowHz = clamped;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>スペクトルの対象帯域の上限（Hz、下限〜20000）。</summary>
+    public double SelectedVisualizationHighHz
+    {
+        get => SelectedClip?.Visualization?.HighHz ?? 16000;
+        set
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null)
+                return;
+            var clamped = Math.Clamp(value, Math.Max(1, viz.LowHz), 20000);
+            if (Math.Abs(viz.HighHz - clamped) < 1e-9)
+                return;
+            viz.HighHz = clamped;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>スペクトルの本数（4〜128）。</summary>
+    public int SelectedVisualizationBandCount
+    {
+        get => SelectedClip?.Visualization?.BandCount ?? 32;
+        set
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null)
+                return;
+            var clamped = (int)Math.Clamp(value, 4, 128);
+            if (viz.BandCount == clamped)
+                return;
+            viz.BandCount = clamped;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>スペクトルの帯域を対数間隔で分けるか（false なら線形間隔）。離散的な変更なので、代入前にスナップショットを取る。</summary>
+    public bool SelectedVisualizationLogarithmic
+    {
+        get => SelectedClip?.Visualization?.Logarithmic ?? true;
+        set
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null || viz.Logarithmic == value)
+                return;
+            BeginEdit();
+            viz.Logarithmic = value;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>高さ・振幅のゲイン（0.1〜4）。</summary>
+    public double SelectedVisualizationGain
+    {
+        get => SelectedClip?.Visualization?.Gain ?? 1.0;
+        set
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null)
+                return;
+            var clamped = VisualizationSettings.ClampGain(value);
+            if (Math.Abs(viz.Gain - clamped) < 1e-9)
+                return;
+            viz.Gain = clamped;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>線の太さ（px、0.5〜10）。波形・リサジューで使う。</summary>
+    public double SelectedVisualizationLineWidth
+    {
+        get => SelectedClip?.Visualization?.LineWidth ?? 2.0;
+        set
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null)
+                return;
+            var clamped = VisualizationSettings.ClampLineWidth(value);
+            if (Math.Abs(viz.LineWidth - clamped) < 1e-9)
+                return;
+            viz.LineWidth = clamped;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>波形の表示区間の長さ（秒、0.02〜1）。</summary>
+    public double SelectedVisualizationWindowSeconds
+    {
+        get => SelectedClip?.Visualization?.WindowSeconds ?? 0.1;
+        set
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null)
+                return;
+            var clamped = VisualizationSettings.ClampWindowSeconds(value);
+            if (Math.Abs(viz.WindowSeconds - clamped) < 1e-9)
+                return;
+            viz.WindowSeconds = clamped;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>リサジューの残像の長さ（秒、0〜1）。0 で残像なし。</summary>
+    public double SelectedVisualizationTrailSeconds
+    {
+        get => SelectedClip?.Visualization?.TrailSeconds ?? 0.25;
+        set
+        {
+            var viz = SelectedClip?.Visualization;
+            if (viz is null)
+                return;
+            var clamped = VisualizationSettings.ClampTrailSeconds(value);
+            if (Math.Abs(viz.TrailSeconds - clamped) < 1e-9)
+                return;
+            viz.TrailSeconds = clamped;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
         }
     }
 
@@ -769,19 +583,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return null;
     }
 
-    /// <summary>キーフレーム編集で選んでいるパラメータ（"Opacity" など）。</summary>
+    /// <summary>キーフレーム編集で選んでいるパラメータ（"Opacity" など）。一覧を作り直す際に ComboBox から null が書き戻されることがあるので、空値は無視する。</summary>
     public string KeyframeParameter
     {
         get => _keyframeParameter;
         set
         {
-            if (_keyframeParameter == value)
+            if (string.IsNullOrEmpty(value) || _keyframeParameter == value)
                 return;
             _keyframeParameter = value;
             OnPropertyChanged();
             RefreshKeyframeRows();
         }
     }
+
+    /// <summary>キーフレーム編集で選べるパラメータ（基本5つ＋選択中クリップのエフェクトの Amount / Radius）。</summary>
+    public ObservableCollection<KeyframeParameterOption> KeyframeParameterOptions { get; } = new();
 
     /// <summary>選択中クリップのキーフレーム行。</summary>
     public ObservableCollection<KeyframeRow> KeyframeRows { get; } = new();
@@ -860,33 +677,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>BPM検出の実行中か。</summary>
-    public bool IsDetectingBpm
-    {
-        get => _isDetectingBpm;
-        private set
-        {
-            _isDetectingBpm = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(CanDetectBpm));
-        }
-    }
+    public bool IsDetectingBpm => _detection.IsDetectingBpm;
 
     /// <summary>BPM検出ボタンを押せるか（検出中は押せない）。</summary>
-    public bool CanDetectBpm => !IsDetectingBpm;
+    public bool CanDetectBpm => _detection.CanDetectBpm;
 
     /// <summary>未適用の検出結果があるか（「適用」ボタンの有効化に使う）。</summary>
-    public bool HasPendingDetection => _pendingDetection is not null;
+    public bool HasPendingDetection => _detection.HasPendingDetection;
 
     /// <summary>検出結果の表示（例：検出：120.3 BPM（信頼度 87%）・拍 128個）。未検出時は空。</summary>
-    public string DetectedBpmText
-    {
-        get
-        {
-            if (_pendingDetection?.Bpm is not { } bpm)
-                return string.Empty;
-            return $"検出：{bpm:F1} BPM（信頼度 {_pendingDetection.Confidence:P0}）・拍 {_pendingDetection.BeatTimes.Count}個";
-        }
-    }
+    public string DetectedBpmText => _detection.DetectedBpmText;
 
     /// <summary>
     /// 適用済みの検出ビートマップ（タイムライン時刻）。拍グリッド表示は、
@@ -894,354 +694,54 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// </summary>
     public BeatMap? DetectedBeatMap
     {
-        get => _detectedBeatMap;
-        private set
-        {
-            if (_detectedBeatMap == value)
-                return;
-            _detectedBeatMap = value;
-            OnPropertyChanged();
-        }
+        get => _detection.DetectedBeatMap;
+        private set => _detection.DetectedBeatMap = value;
     }
 
-    /// <summary>
-    /// BPMを自動検出する。対象は選択中の音声クリップ（または音声つき映像クリップ）、
-    /// 無ければプロジェクト内の最初の音声クリップ、次に最初の映像クリップ。
-    /// 結果は保留し、「適用」でプロジェクトへ反映する。検出中は UI を固めない。
-    /// </summary>
-    public async Task DetectBpmAsync()
-    {
-        if (IsDetectingBpm)
-            return;
+    /// <summary>BPMを自動検出する。結果は保留し、「適用」でプロジェクトへ反映する。</summary>
+    public Task DetectBpmAsync() => _detection.DetectBpmAsync();
 
-        var clip = FindDetectionTargetClip();
-        if (clip is null)
-        {
-            StatusMessage = "BPMを検出するには、音声クリップまたは映像クリップをタイムラインに置いてください。";
-            return;
-        }
-
-        IsDetectingBpm = true;
-        StatusMessage = $"BPMを検出中…：{clip.Name}";
-        try
-        {
-            var result = await _beatAnalyzer.AnalyzeAsync(clip.SourcePath).ConfigureAwait(true);
-            if (!result.Detected)
-            {
-                SetPendingDetection(null, null);
-                StatusMessage = $"BPMを検出できませんでした：{result.FailureReason}";
-                return;
-            }
-            SetPendingDetection(result, clip);
-            StatusMessage = $"BPMを検出しました：{result.Bpm:F1}（信頼度 {result.Confidence:P0}）。「適用」を押すとプロジェクトに反映されます。";
-        }
-        catch (OperationCanceledException)
-        {
-            StatusMessage = "BPMの検出をキャンセルしました。";
-        }
-        catch (Exception ex)
-        {
-            SetPendingDetection(null, null);
-            StatusMessage = $"BPMの検出に失敗しました：{ex.Message}";
-        }
-        finally
-        {
-            IsDetectingBpm = false;
-        }
-    }
-
-    /// <summary>
-    /// 保留中の検出結果をプロジェクトへ反映する。BPM と拍オフセットを設定し、
-    /// 検出した拍時刻をビートマップとして保持する（アンドゥ対象）。
-    /// </summary>
-    public void ApplyDetectedBpm()
-    {
-        var result = _pendingDetection;
-        var clip = _pendingDetectionClip;
-        if (result is null || result.Bpm is null)
-        {
-            StatusMessage = "適用する検出結果がありません。先に「BPMを検出」を押してください。";
-            return;
-        }
-        // 検出後にクリップがプロジェクトから無くなっていたら適用しない。
-        if (clip is null || !Project.Tracks.SelectMany(t => t.Clips).Contains(clip))
-        {
-            SetPendingDetection(null, null);
-            StatusMessage = "検出対象のクリップが無くなったため、適用できませんでした。もう一度検出してください。";
-            return;
-        }
-
-        BeginEdit();
-
-        // 素材内時刻をタイムライン時刻に変換する。
-        var shift = clip.StartSeconds - clip.InPointSeconds;
-        var rawOffset = clip.StartSeconds + (result.OffsetSeconds - clip.InPointSeconds);
-        // 拍オフセットは 0〜1周期の範囲に正規化する（負の場合は周期を足して合わせる）。
-        // 0 で丸めるだけだと、イン点が大きいときに拍グリッドと検出拍がずれてしまう。
-        var period = 60.0 / result.Bpm.Value;
-        var offset = rawOffset - Math.Floor(rawOffset / period) * period;
-        var beatTimes = result.BeatTimes
-            .Select(t => t + shift)
-            .Where(t => t >= clip.StartSeconds - 1e-6 && t <= clip.EndSeconds + 1e-6)
-            .Select(t => Math.Clamp(t, clip.StartSeconds, clip.EndSeconds))
-            .ToList();
-
-        // Bpm セッターは検出済みビートマップを消すので、先に BPM・オフセットを設定する。
-        Bpm = result.Bpm.Value;
-        Project.BeatOffsetSeconds = offset;
-        DetectedBeatMap = new BeatMap
-        {
-            Source = BeatMapSource.WaveformDetected,
-            Bpm = result.Bpm.Value,
-            OffsetSeconds = Project.BeatOffsetSeconds,
-            BeatTimes = beatTimes
-        };
-        SetPendingDetection(null, null);
-        NotifyTimelineChanged();
-        StatusMessage = $"BPM {result.Bpm:F1} と拍 {beatTimes.Count}個を反映しました（{clip.Name}）。";
-    }
-
-    /// <summary>検出対象のクリップを選ぶ。選択中クリップを優先する。</summary>
-    private Clip? FindDetectionTargetClip()
-    {
-        var selected = SelectedClip;
-        if (selected is not null
-            && (selected.Kind == ClipKind.Audio || selected.Kind == ClipKind.Video)
-            && !string.IsNullOrEmpty(selected.SourcePath))
-            return selected;
-
-        foreach (var track in Project.Tracks)
-            foreach (var clip in track.Clips)
-                if (clip.Kind == ClipKind.Audio && !string.IsNullOrEmpty(clip.SourcePath))
-                    return clip;
-
-        foreach (var track in Project.Tracks)
-            foreach (var clip in track.Clips)
-                if (clip.Kind == ClipKind.Video && !string.IsNullOrEmpty(clip.SourcePath))
-                    return clip;
-
-        return null;
-    }
+    /// <summary>保留中の検出結果をプロジェクトへ反映する（アンドゥ対象）。</summary>
+    public void ApplyDetectedBpm() => _detection.ApplyDetectedBpm();
 
     /// <summary>無音検出の実行中か。</summary>
-    public bool IsDetectingSilence
-    {
-        get => _isDetectingSilence;
-        private set
-        {
-            _isDetectingSilence = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(CanDetectSilence));
-            OnPropertyChanged(nameof(CanSilenceCut));
-        }
-    }
+    public bool IsDetectingSilence => _detection.IsDetectingSilence;
 
     /// <summary>無音検出ボタンを押せるか（検出中は押せない）。</summary>
-    public bool CanDetectSilence => !IsDetectingSilence;
+    public bool CanDetectSilence => _detection.CanDetectSilence;
 
     /// <summary>無音とみなすしきい値（dBFS、-90〜-10）。検出パラメータで、プロジェクトには保存しない。</summary>
     public double SilenceThresholdDb
     {
-        get => _silenceThresholdDb;
-        set
-        {
-            var clamped = Math.Clamp(value, -90, -10);
-            if (Math.Abs(_silenceThresholdDb - clamped) < 1e-9)
-                return;
-            _silenceThresholdDb = clamped;
-            OnPropertyChanged();
-        }
+        get => _detection.SilenceThresholdDb;
+        set => _detection.SilenceThresholdDb = value;
     }
 
     /// <summary>無音区間とみなす最短の長さ（秒、0.1〜10）。</summary>
     public double SilenceMinSeconds
     {
-        get => _silenceMinSeconds;
-        set
-        {
-            var clamped = Math.Clamp(value, 0.1, 10);
-            if (Math.Abs(_silenceMinSeconds - clamped) < 1e-9)
-                return;
-            _silenceMinSeconds = clamped;
-            OnPropertyChanged();
-        }
+        get => _detection.SilenceMinSeconds;
+        set => _detection.SilenceMinSeconds = value;
     }
 
     /// <summary>無音区間の前後に残す余白（秒、0〜1）。</summary>
     public double SilenceMarginSeconds
     {
-        get => _silenceMarginSeconds;
-        set
-        {
-            var clamped = Math.Clamp(value, 0, 1);
-            if (Math.Abs(_silenceMarginSeconds - clamped) < 1e-9)
-                return;
-            _silenceMarginSeconds = clamped;
-            OnPropertyChanged();
-        }
+        get => _detection.SilenceMarginSeconds;
+        set => _detection.SilenceMarginSeconds = value;
     }
 
     /// <summary>未適用の無音検出結果があるか（「適用」ボタンの有効化に使う）。</summary>
-    public bool HasPendingSilence => _pendingSilence is not null;
+    public bool HasPendingSilence => _detection.HasPendingSilence;
 
     /// <summary>無音検出結果の表示（例：無音区間 12 個、合計 34.5 秒）。未検出時は空。</summary>
-    public string SilenceDetectionText
-    {
-        get
-        {
-            if (_pendingSilence is null)
-                return string.Empty;
-            if (_pendingSilence.Segments.Count == 0)
-                return "無音区間は見つかりませんでした。";
-            var longest = _pendingSilence.Segments.Max(s => s.DurationSeconds);
-            return $"無音区間 {_pendingSilence.Segments.Count} 個、合計 {_pendingSilence.TotalSilenceSeconds:F1} 秒（最長 {longest:F1} 秒）";
-        }
-    }
+    public string SilenceDetectionText => _detection.SilenceDetectionText;
 
-    /// <summary>
-    /// 選択中クリップの無音区間を検出する。対象は音声クリップ、または音声つき映像クリップ
-    /// （映像クリップの場合は映像も一緒に切れる）。検出は非同期で、結果は保留し、
-    /// 「適用」でプロジェクトへ反映する。検出中は UI を固めない。
-    /// </summary>
-    public async Task DetectSilenceAsync()
-    {
-        if (IsDetectingSilence)
-            return;
+    /// <summary>選択中クリップの無音区間を検出する。結果は保留し、「適用」でプロジェクトへ反映する。</summary>
+    public Task DetectSilenceAsync() => _detection.DetectSilenceAsync();
 
-        var clip = SelectedClip;
-        if (clip is null || (clip.Kind != ClipKind.Audio && clip.Kind != ClipKind.Video)
-            || string.IsNullOrEmpty(clip.SourcePath))
-        {
-            StatusMessage = "無音カットするには、音声クリップまたは映像クリップを選択してください。";
-            return;
-        }
-
-        IsDetectingSilence = true;
-        StatusMessage = $"無音区間を検出中…：{clip.Name}";
-        try
-        {
-            var settings = new SilenceDetectionSettings
-            {
-                ThresholdDb = SilenceThresholdDb,
-                MinSilenceSeconds = SilenceMinSeconds,
-                MarginSeconds = SilenceMarginSeconds
-            };
-            var result = await _silenceDetector.AnalyzeAsync(
-                clip.SourcePath, clip.InPointSeconds, clip.DurationSeconds, settings)
-                .ConfigureAwait(true);
-            if (!result.Detected)
-            {
-                SetPendingSilence(null, null);
-                StatusMessage = $"無音区間を検出できませんでした：{result.FailureReason}";
-                return;
-            }
-            SetPendingSilence(result, clip);
-            StatusMessage = result.Segments.Count == 0
-                ? "無音区間は見つかりませんでした。"
-                : $"無音区間を検出しました：{result.Segments.Count} 個、合計 {result.TotalSilenceSeconds:F1} 秒。「適用」を押すと切り取ります。";
-        }
-        catch (OperationCanceledException)
-        {
-            StatusMessage = "無音区間の検出をキャンセルしました。";
-        }
-        catch (Exception ex)
-        {
-            SetPendingSilence(null, null);
-            StatusMessage = $"無音区間の検出に失敗しました：{ex.Message}";
-        }
-        finally
-        {
-            IsDetectingSilence = false;
-        }
-    }
-
-    /// <summary>
-    /// 保留中の無音検出結果をプロジェクトへ反映する。無音区間の前後でクリップを分割し、
-    /// 無音部分を削除して、同じトラックの後ろのクリップを前に詰める。
-    /// 分割・削除・詰めを1回の操作として1つのアンドゥ・スナップショットにする。
-    /// 映像クリップの場合は映像も一緒に切れる。
-    /// </summary>
-    public void ApplySilenceCut()
-    {
-        var result = _pendingSilence;
-        var clip = _pendingSilenceClip;
-        if (result is null)
-        {
-            StatusMessage = "適用する検出結果がありません。先に「検出」を押してください。";
-            return;
-        }
-        // 検出後にクリップがプロジェクトから無くなっていたら適用しない。
-        if (clip is null || !Project.Tracks.SelectMany(t => t.Clips).Contains(clip))
-        {
-            SetPendingSilence(null, null);
-            StatusMessage = "検出対象のクリップが無くなったため、適用できませんでした。もう一度検出してください。";
-            return;
-        }
-        // 検出後にクリップをトリミングしていたら、検出区間とクリップの対応がずれるため適用しない。
-        if (Math.Abs(clip.InPointSeconds - _pendingSilenceInPoint) > 1e-6
-            || Math.Abs(clip.DurationSeconds - _pendingSilenceDuration) > 1e-6)
-        {
-            SetPendingSilence(null, null);
-            StatusMessage = "検出後にクリップが変更されたため、適用できませんでした。もう一度検出してください。";
-            return;
-        }
-        if (result.Segments.Count == 0)
-        {
-            StatusMessage = "切る無音区間がありません。";
-            return;
-        }
-        var track = Project.Tracks.FirstOrDefault(t => t.Clips.Contains(clip));
-        if (track is null)
-        {
-            SetPendingSilence(null, null);
-            StatusMessage = "検出対象のクリップが無くなったため、適用できませんでした。";
-            return;
-        }
-
-        // 検出した区間（イン点からの相対秒）をタイムライン時刻に変換する。
-        var segments = result.Segments
-            .Select(s => (StartSeconds: clip.StartSeconds + s.StartSeconds,
-                          EndSeconds: clip.StartSeconds + s.EndSeconds))
-            .ToList();
-
-        BeginEdit();
-        var removed = TimelineEditor.CutSilenceRanges(track, clip, segments);
-        // クリップ自体が消えた場合（全体が無音だった場合）は選択を外す。
-        if (!Project.Tracks.SelectMany(t => t.Clips).Contains(clip))
-            SelectedClip = null;
-        SetPendingSilence(null, null);
-        NotifyTimelineChanged();
-        StatusMessage = $"無音区間 {removed} 個を切り取りました（合計 {result.TotalSilenceSeconds:F1} 秒）。";
-    }
-
-    /// <summary>保留中の無音検出結果を差し替え、関連する表示を更新する。</summary>
-    private void SetPendingSilence(SilenceDetectionResult? result, Clip? clip)
-    {
-        _pendingSilence = result;
-        _pendingSilenceClip = clip;
-        // 検出時のクリップの形を記録する（適用時に変わっていたら適用しない）。
-        _pendingSilenceInPoint = clip?.InPointSeconds ?? 0;
-        _pendingSilenceDuration = clip?.DurationSeconds ?? 0;
-        OnPropertyChanged(nameof(HasPendingSilence));
-        OnPropertyChanged(nameof(SilenceDetectionText));
-    }
-
-    /// <summary>保留中の検出結果を差し替え、関連する表示を更新する。</summary>
-    private void SetPendingDetection(BeatDetectionResult? result, Clip? clip)
-    {
-        _pendingDetection = result;
-        _pendingDetectionClip = clip;
-        OnPropertyChanged(nameof(HasPendingDetection));
-        OnPropertyChanged(nameof(DetectedBpmText));
-    }
-
-    /// <summary>保留中の検出結果と適用済みビートマップを消す（プロジェクト切替・読込時など）。</summary>
-    private void ClearDetectionState()
-    {
-        SetPendingDetection(null, null);
-        SetPendingSilence(null, null);
-        DetectedBeatMap = null;
-    }
+    /// <summary>保留中の無音検出結果をプロジェクトへ反映する（アンドゥ対象）。</summary>
+    public void ApplySilenceCut() => _detection.ApplySilenceCut();
 
     public GridMode GridMode
     {
@@ -1359,7 +859,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         if (info.HasAudio)
         {
-            var waveform = await Task.Run(() => _waveformReader.Read(path)).ConfigureAwait(true);
+            // 波形もキャッシュ対象。プロジェクトのキャッシュフォルダが決まっていれば
+            // ディスクキャッシュを使い、無ければ読み直す（2回目の読み込みが速くなる）。
+            var waveform = await Task.Run(() => _waveformCache.GetOrRead(path)).ConfigureAwait(true);
             Waveforms[path] = waveform;
         }
 
@@ -1415,6 +917,107 @@ public sealed class MainViewModel : INotifyPropertyChanged
         NotifyTimelineChanged();
     }
 
+    /// <summary>「可視化を追加」で選んでいる種類（既定はスペクトル）。</summary>
+    private VisualizationKind _newVisualizationKind = VisualizationKind.Spectrum;
+
+    public VisualizationKind NewVisualizationKind
+    {
+        get => _newVisualizationKind;
+        set
+        {
+            if (_newVisualizationKind == value)
+                return;
+            _newVisualizationKind = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
+    /// 音の可視化クリップを再生ヘッド位置に追加する。可視化クリップは映像トラックに置き、
+    /// 位置・拡大率は他のクリップと同じキーフレームで動かせる。
+    /// 音源は再生ヘッド位置で有効な音声クリップ、無ければ最初の音声つきクリップ。
+    /// 長さは音源クリップの残り（再生ヘッド位置で有効なとき）か、音源全体の長さ。
+    /// </summary>
+    public void AddVisualizationClip(VisualizationKind kind)
+    {
+        BeginEdit();
+        var track = Project.Tracks.FirstOrDefault(t => t.Kind == TrackKind.Video)
+            ?? Project.AddTrack(TrackKind.Video, "ビデオ 1");
+
+        var source = FindVisualizationDefaultSource();
+        double duration;
+        if (source is not null && source.IsActiveAt(PlayheadSeconds))
+            duration = Math.Max(0.5, source.EndSeconds - PlayheadSeconds);
+        else if (source is not null)
+            duration = source.DurationSeconds;
+        else
+            duration = 5;
+
+        var settings = new VisualizationSettings
+        {
+            Kind = kind,
+            SourceClipId = source?.Id ?? string.Empty,
+            ColorHex = DefaultVisualizationColor(kind)
+        };
+        var clip = new Clip
+        {
+            Name = VisualizationDisplayName(kind),
+            Kind = ClipKind.Visualization,
+            StartSeconds = PlayheadSeconds,
+            DurationSeconds = duration,
+            Visualization = settings
+        };
+        track.Clips.Add(clip);
+        SelectedClip = clip;
+        RequestVisualizationAnalysis(settings);
+        NotifyTimelineChanged();
+        StatusMessage = source is null
+            ? $"可視化クリップを追加しました：{clip.Name}（音源が無いため、音声クリップを置いて音源を選んでください）"
+            : $"可視化クリップを追加しました：{clip.Name}（音源：{source.Name}）";
+    }
+
+    /// <summary>可視化の種類の表示名。</summary>
+    public static string VisualizationDisplayName(VisualizationKind kind) => kind switch
+    {
+        VisualizationKind.Spectrum => "スペクトル",
+        VisualizationKind.Waveform => "波形",
+        VisualizationKind.Lissajous => "リサジュー",
+        _ => kind.ToString()
+    };
+
+    /// <summary>可視化の種類ごとの既定の描画色。</summary>
+    private static string DefaultVisualizationColor(VisualizationKind kind) => kind switch
+    {
+        VisualizationKind.Spectrum => "#22D3EE",
+        VisualizationKind.Waveform => "#4ADE80",
+        VisualizationKind.Lissajous => "#FF2E88",
+        _ => "#22D3EE"
+    };
+
+    /// <summary>可視化クリップ追加時の音源の既定値。再生ヘッド位置で有効な音声クリップを優先し、無ければ最初の音声つきクリップ。</summary>
+    private Clip? FindVisualizationDefaultSource()
+    {
+        var active = FindVisualizationSourceClip();
+        if (active is not null)
+            return active;
+        return Project.Tracks.SelectMany(t => t.Clips)
+            .FirstOrDefault(c => c.Kind == ClipKind.Audio && !string.IsNullOrEmpty(c.SourcePath))
+            ?? Project.Tracks.SelectMany(t => t.Clips)
+                .FirstOrDefault(c => c.Kind == ClipKind.Video && !string.IsNullOrEmpty(c.SourcePath));
+    }
+
+    /// <summary>可視化の音源クリップの解析を（未解析なら）バックグラウンドで走らせる。</summary>
+    internal void RequestVisualizationAnalysis(VisualizationSettings viz)
+    {
+        if (string.IsNullOrEmpty(viz.SourceClipId))
+            return;
+        var source = Project.Tracks
+            .SelectMany(t => t.Clips)
+            .FirstOrDefault(c => c.Id == viz.SourceClipId);
+        if (source is not null)
+            _ = EnsureAnalysisAsync(source);
+    }
+
     /// <summary>再生ヘッド位置で全トラックのクリップを分割する。対象が無ければ何もしない。</summary>
     public void SplitAtPlayhead()
     {
@@ -1456,9 +1059,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         NotifyTimelineChanged();
     }
 
-    /// <summary>選択中クリップ・選択中パラメータのキーフレーム行を作り直す（時刻順）。</summary>
+    /// <summary>選択中クリップ・選択中パラメータのキーフレーム行を作り直す（時刻順）。ついでに選べるパラメータ一覧も作り直す。</summary>
     public void RefreshKeyframeRows()
     {
+        RefreshKeyframeParameterOptions();
         KeyframeRows.Clear();
         var clip = SelectedClip;
         if (clip is null)
@@ -1466,8 +1070,115 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var track = clip.KeyframeTracks.FirstOrDefault(t => t.ParameterName == KeyframeParameter);
         if (track is null)
             return;
-        foreach (var keyframe in track.Keyframes.OrderBy(k => k.TimeSeconds))
+        foreach (var keyframe in track.Keyframes)
             KeyframeRows.Add(new KeyframeRow(this, clip, KeyframeParameter, keyframe));
+    }
+
+    /// <summary>
+    /// キーフレーム編集で選べるパラメータ一覧を作り直す。基本5つに、選択中クリップに
+    /// 付いているエフェクトの Amount / Radius（Radius を使う種類だけ）と、
+    /// 可視化クリップのゲイン・線の太さ・表示区間・残像（種類ごと）を足す。
+    /// 今選んでいるパラメータが一覧に無くなったら（エフェクトを消した等）、不透明度に戻す。
+    /// </summary>
+    private void RefreshKeyframeParameterOptions()
+    {
+        KeyframeParameterOptions.Clear();
+        KeyframeParameterOptions.Add(new KeyframeParameterOption { Display = "不透明度", Value = "Opacity" });
+        KeyframeParameterOptions.Add(new KeyframeParameterOption { Display = "拡大率", Value = "Scale" });
+        KeyframeParameterOptions.Add(new KeyframeParameterOption { Display = "回転", Value = "Rotation" });
+        KeyframeParameterOptions.Add(new KeyframeParameterOption { Display = "位置 X", Value = "PositionX" });
+        KeyframeParameterOptions.Add(new KeyframeParameterOption { Display = "位置 Y", Value = "PositionY" });
+
+        var clip = SelectedClip;
+        if (clip is not null)
+        {
+            foreach (var option in EffectParameterOptions())
+                KeyframeParameterOptions.Add(option);
+
+            // 可視化クリップ：ゲインは全種、線の太さ・表示区間・残像は種類ごと。
+            var viz = clip.Visualization;
+            if (viz is not null)
+            {
+                KeyframeParameterOptions.Add(new KeyframeParameterOption
+                {
+                    Display = "可視化：ゲイン",
+                    Value = VisualizationSettings.KeyframeParameterName("Gain")
+                });
+                if (viz.Kind is VisualizationKind.Waveform or VisualizationKind.Lissajous)
+                {
+                    KeyframeParameterOptions.Add(new KeyframeParameterOption
+                    {
+                        Display = "可視化：線の太さ",
+                        Value = VisualizationSettings.KeyframeParameterName("LineWidth")
+                    });
+                }
+                if (viz.Kind == VisualizationKind.Waveform)
+                {
+                    KeyframeParameterOptions.Add(new KeyframeParameterOption
+                    {
+                        Display = "可視化：表示区間",
+                        Value = VisualizationSettings.KeyframeParameterName("WindowSeconds")
+                    });
+                }
+                if (viz.Kind == VisualizationKind.Lissajous)
+                {
+                    KeyframeParameterOptions.Add(new KeyframeParameterOption
+                    {
+                        Display = "可視化：残像",
+                        Value = VisualizationSettings.KeyframeParameterName("TrailSeconds")
+                    });
+                }
+            }
+        }
+
+        if (KeyframeParameterOptions.All(o => o.Value != _keyframeParameter))
+        {
+            _keyframeParameter = "Opacity";
+            OnPropertyChanged(nameof(KeyframeParameter));
+        }
+    }
+
+    /// <summary>
+    /// キーフレームの値をパラメータの範囲に丸める。不透明度は 0〜1、
+    /// エフェクト・可視化のパラメータは種類ごとの範囲、その他はそのまま。
+    /// </summary>
+    public static double ClampKeyframeValue(string parameterName, double value)
+    {
+        if (parameterName == "Opacity")
+            return Math.Clamp(value, 0, 1);
+        if (VisualizationSettings.TryParseKeyframeParameter(parameterName, out var vizField))
+            return VisualizationSettings.ClampKeyframeValue(vizField, value);
+        if (TryParseEffectParameter(parameterName, out var kind, out var isAmount))
+            return isAmount ? ClipEffect.ClampAmount(kind, value) : ClipEffect.ClampRadius(kind, value);
+        return value;
+    }
+
+    /// <summary>キーフレームのパラメータ名 "Effect:{種類}.Amount/Radius" を分解する。エフェクト用でなければ false。</summary>
+    public static bool TryParseEffectParameter(string parameterName, out EffectKind kind, out bool isAmount)
+    {
+        kind = default;
+        isAmount = true;
+        const string prefix = "Effect:";
+        if (!parameterName.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        var rest = parameterName[prefix.Length..];
+        var dot = rest.LastIndexOf('.');
+        if (dot <= 0)
+            return false;
+        if (!Enum.TryParse<EffectKind>(rest[..dot], out kind))
+            return false;
+        var field = rest[(dot + 1)..];
+        if (field == "Amount")
+        {
+            isAmount = true;
+            return true;
+        }
+        if (field == "Radius")
+        {
+            isAmount = false;
+            return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -1492,10 +1203,32 @@ public sealed class MainViewModel : INotifyPropertyChanged
             "Scale" => 1.0,
             _ => 0.0
         };
+        // エフェクトのパラメータは、その時刻の評価値（キーフレームが無ければ固定値）を使う。
+        if (TryParseEffectParameter(KeyframeParameter, out var effectKind, out var isAmount))
+        {
+            var effect = clip.Effects.FirstOrDefault(e => e.Kind == effectKind);
+            if (effect is not null)
+                defaultValue = isAmount ? effect.Amount : effect.Radius;
+        }
+        // 可視化のパラメータも、その時刻の評価値（キーフレームが無ければ固定値）を使う。
+        if (VisualizationSettings.TryParseKeyframeParameter(KeyframeParameter, out var vizField))
+        {
+            var viz = clip.Visualization;
+            if (viz is not null)
+            {
+                defaultValue = vizField switch
+                {
+                    "Gain" => viz.Gain,
+                    "LineWidth" => viz.LineWidth,
+                    "WindowSeconds" => viz.WindowSeconds,
+                    "TrailSeconds" => viz.TrailSeconds,
+                    _ => 0.0
+                };
+            }
+        }
         var value = clip.EvaluateParameter(KeyframeParameter, local, defaultValue);
         var track = clip.EnsureTrack(KeyframeParameter);
-        track.Keyframes.Add(new Keyframe(local, value));
-        track.Keyframes.Sort((a, b) => a.TimeSeconds.CompareTo(b.TimeSeconds));
+        track.AddKeyframe(new Keyframe(local, value));
         RefreshKeyframeRows();
         NotifyTimelineChanged();
         StatusMessage = $"キーフレームを追加しました：{KeyframeParameter} {local:F2}s = {value:F2}";
@@ -1511,7 +1244,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (track is null || !track.Keyframes.Contains(row.Keyframe))
             return;
         BeginEdit();
-        track.Keyframes.Remove(row.Keyframe);
+        track.RemoveKeyframe(row.Keyframe);
         RefreshKeyframeRows();
         NotifyTimelineChanged();
     }
@@ -1534,7 +1267,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void AddEffect(EffectKind kind)
     {
         var clip = SelectedClip;
-        if (clip is null || clip.Kind == ClipKind.Audio)
+        if (clip is null || clip.Kind == ClipKind.Audio || clip.Kind == ClipKind.Visualization)
             return;
         if (clip.Effects.Any(e => e.Kind == kind))
         {
@@ -1545,6 +1278,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         BeginEdit();
         clip.Effects.Add(CreateEffect(kind));
         RefreshEffectRows();
+        RefreshKeyframeRows(); // エフェクトが増えるとキーフレームで選べるパラメータも増える。
+        RefreshAudioBindingRows(); // バインドの対象に選べるエフェクト量も増える。
         NotifyTimelineChanged();
         StatusMessage = $"エフェクトを追加しました：{EffectDisplayName(kind)}";
     }
@@ -1558,36 +1293,74 @@ public sealed class MainViewModel : INotifyPropertyChanged
         BeginEdit();
         clip.Effects.Remove(row.Effect);
         RefreshEffectRows();
+        RefreshKeyframeRows(); // エフェクトが減るとキーフレームで選べるパラメータも減る。
+        RefreshAudioBindingRows(); // バインドの対象に選べるエフェクト量も減る（対象が無くなった既存バインドは残り、評価では無視される）。
         NotifyTimelineChanged();
     }
 
-    /// <summary>種類ごとの既定パラメータでエフェクトを作る。</summary>
-    private static ClipEffect CreateEffect(EffectKind kind) => kind switch
+    /// <summary>種類ごとの既定パラメータでエフェクトを作る。既定値は EffectDefinitions の1テーブルが持つ（KeyColorHex は ClipEffect の既定値 "#00FF00" のまま）。</summary>
+    private static ClipEffect CreateEffect(EffectKind kind)
     {
-        EffectKind.Blur => new ClipEffect { Kind = kind, Amount = 8 },
-        EffectKind.Glow => new ClipEffect { Kind = kind, Amount = 0.5, Radius = 16 },
-        EffectKind.RgbShift => new ClipEffect { Kind = kind, Amount = 6 },
-        EffectKind.Slice => new ClipEffect { Kind = kind, Amount = 24 },
-        EffectKind.Warp => new ClipEffect { Kind = kind, Amount = 20, Radius = 240 },
-        EffectKind.ChromaKey => new ClipEffect { Kind = kind, Amount = 0.30, Radius = 0.15, KeyColorHex = "#00FF00" },
-        _ => new ClipEffect { Kind = kind }
-    };
+        var definition = EffectDefinitions.Get(kind);
+        return new ClipEffect
+        {
+            Kind = kind,
+            Amount = definition?.DefaultAmount ?? 0,
+            Radius = definition?.DefaultRadius ?? 0
+        };
+    }
 
-    /// <summary>エフェクト種類の表示名。</summary>
-    private static string EffectDisplayName(EffectKind kind) => kind switch
+    /// <summary>エフェクト種類の表示名。表示名は EffectDefinitions の1テーブルが持つ。</summary>
+    public static string EffectDisplayName(EffectKind kind)
+        => EffectDefinitions.Get(kind)?.DisplayName ?? kind.ToString();
+
+    /// <summary>エフェクトの主パラメータ欄の見出し（種類ごと）。見出しは EffectDefinitions の1テーブルが持つ。</summary>
+    public static string EffectAmountLabel(EffectKind kind)
+        => EffectDefinitions.Get(kind)?.AmountLabel ?? "量";
+
+    /// <summary>エフェクト量のパラメータ名 "Effect:{種類}.Amount/Radius" の表示名（"エフェクト：グロー（強さ）" など）。エフェクト用でなければ null。キーフレーム欄とバインド欄で共通。</summary>
+    public static string? EffectParameterLabel(string parameterName)
     {
-        EffectKind.Blur => "ブラー",
-        EffectKind.Glow => "グロー",
-        EffectKind.RgbShift => "RGBシフト",
-        EffectKind.Slice => "スライス",
-        EffectKind.Warp => "ワープ（波）",
-        EffectKind.ChromaKey => "クロマキー",
-        _ => kind.ToString()
-    };
+        if (!TryParseEffectParameter(parameterName, out var kind, out var isAmount))
+            return null;
+        var label = isAmount ? EffectAmountLabel(kind) : EffectRadiusLabel(kind);
+        return $"エフェクト：{EffectDisplayName(kind)}（{label}）";
+    }
 
-    /// <summary>選択中クリップの音連動バインド行を作り直す（追加した順）。</summary>
+    /// <summary>選択中クリップに付いているエフェクトの Amount / Radius のパラメータ選択肢（Radius を使う種類だけ副パラメータも）。キーフレーム欄とバインド欄で共通。</summary>
+    private IEnumerable<KeyframeParameterOption> EffectParameterOptions()
+    {
+        var clip = SelectedClip;
+        if (clip is null)
+            yield break;
+        foreach (var effect in clip.Effects)
+        {
+            var amountName = ClipEffect.KeyframeParameterName(effect.Kind, isAmount: true);
+            yield return new KeyframeParameterOption
+            {
+                Display = EffectParameterLabel(amountName)!,
+                Value = amountName
+            };
+            if (ClipEffect.UsesRadius(effect.Kind))
+            {
+                var radiusName = ClipEffect.KeyframeParameterName(effect.Kind, isAmount: false);
+                yield return new KeyframeParameterOption
+                {
+                    Display = EffectParameterLabel(radiusName)!,
+                    Value = radiusName
+                };
+            }
+        }
+    }
+
+    /// <summary>エフェクトの副パラメータ欄の見出し（種類ごと。Radius を使わない種類は空）。見出しは EffectDefinitions の1テーブルが持つ。</summary>
+    public static string EffectRadiusLabel(EffectKind kind)
+        => EffectDefinitions.Get(kind)?.RadiusLabel ?? string.Empty;
+
+    /// <summary>選択中クリップの音連動バインド行を作り直す（追加した順）。ついでに対象パラメータの一覧も作り直す。</summary>
     public void RefreshAudioBindingRows()
     {
+        RefreshAudioBindingParameterOptions();
         AudioBindingRows.Clear();
         var clip = SelectedClip;
         if (clip is null)
@@ -1596,16 +1369,42 @@ public sealed class MainViewModel : INotifyPropertyChanged
             AudioBindingRows.Add(new AudioBindingRow(this, binding));
     }
 
+    /// <summary>バインドの対象に選べるパラメータ（基本5つ＋選択中クリップのエフェクトの Amount / Radius）。</summary>
+    public ObservableCollection<KeyframeParameterOption> AudioBindingParameterOptions { get; } = new();
+
+    /// <summary>
+    /// バインドの対象パラメータ一覧を作り直す。基本5つに、選択中クリップに
+    /// 付いているエフェクトの Amount / Radius（Radius を使う種類だけ）を足す。
+    /// 今選んでいる追加対象が一覧に無くなったら（エフェクトを消した等）、拡大率に戻す。
+    /// </summary>
+    private void RefreshAudioBindingParameterOptions()
+    {
+        AudioBindingParameterOptions.Clear();
+        AudioBindingParameterOptions.Add(new KeyframeParameterOption { Display = "不透明度", Value = "Opacity" });
+        AudioBindingParameterOptions.Add(new KeyframeParameterOption { Display = "拡大率", Value = "Scale" });
+        AudioBindingParameterOptions.Add(new KeyframeParameterOption { Display = "回転", Value = "Rotation" });
+        AudioBindingParameterOptions.Add(new KeyframeParameterOption { Display = "位置 X", Value = "PositionX" });
+        AudioBindingParameterOptions.Add(new KeyframeParameterOption { Display = "位置 Y", Value = "PositionY" });
+        foreach (var option in EffectParameterOptions())
+            AudioBindingParameterOptions.Add(option);
+
+        if (AudioBindingParameterOptions.All(o => o.Value != _newAudioBindingParameter))
+        {
+            _newAudioBindingParameter = "Scale";
+            OnPropertyChanged(nameof(NewAudioBindingParameter));
+        }
+    }
+
     /// <summary>選択中クリップの音連動バインド行。</summary>
     public ObservableCollection<AudioBindingRow> AudioBindingRows { get; } = new();
 
-    /// <summary>「音連動バインドを追加」で選んでいるパラメータ（既定は拡大率）。</summary>
+    /// <summary>「音連動バインドを追加」で選んでいるパラメータ（既定は拡大率）。一覧を作り直す際に ComboBox から null が書き戻されることがあるので、空値は無視する（キーフレーム欄と同じ対策）。</summary>
     public string NewAudioBindingParameter
     {
         get => _newAudioBindingParameter;
         set
         {
-            if (_newAudioBindingParameter == value)
+            if (string.IsNullOrEmpty(value) || _newAudioBindingParameter == value)
                 return;
             _newAudioBindingParameter = value;
             OnPropertyChanged();
@@ -1639,7 +1438,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (clip.Kind == ClipKind.Audio)
                 return "音声クリップ自体には映像パラメータが無いため、バインドは付けられません。";
             if (clip.AudioBindings.Count == 0)
-                return "音の帯域に合わせてパラメータを動かせます（例：20-80Hz で拡大率）。";
+                return "音の帯域に合わせてパラメータを動かせます（例：20-80Hz で拡大率、グローやブラーの量も可）。";
             var sources = clip.AudioBindings
                 .Where(b => b.Enabled && !string.IsNullOrEmpty(b.SourceClipId))
                 .Select(b => b.SourceClipId)
@@ -1665,7 +1464,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         BeginEdit();
         var parameter = NewAudioBindingParameter;
-        var (combine, min, max) = DefaultBindingRange(parameter);
+        var (combine, min, max) = DefaultBindingRange(parameter, clip);
         var binding = new AudioBinding
         {
             ParameterName = parameter,
@@ -1686,16 +1485,35 @@ public sealed class MainViewModel : INotifyPropertyChanged
         StatusMessage = "音連動バインドを追加しました。";
     }
 
-    /// <summary>パラメータごとのバインド既定値（合成方法・出力範囲）。拡大率は設計プランの例（100%〜112%）に合わせる。</summary>
-    private static (AudioBindCombine Combine, double Min, double Max) DefaultBindingRange(string parameter) => parameter switch
+    /// <summary>
+    /// パラメータごとのバインド既定値（合成方法・出力範囲）。拡大率は設計プランの例（100%〜112%）に合わせる。
+    /// エフェクト量は Add 合成で、無音時は今の固定値、最大音量で種類の範囲の上限まで動く
+    /// （無音時にキーフレーム値のままになるよう、出力範囲の下限を今の固定値にする）。
+    /// </summary>
+    private static (AudioBindCombine Combine, double Min, double Max) DefaultBindingRange(string parameter, Clip? clip)
     {
-        "Opacity" => (AudioBindCombine.Override, 0.0, 1.0),
-        "Scale" => (AudioBindCombine.Add, 1.0, 1.12),
-        "Rotation" => (AudioBindCombine.Add, -10.0, 10.0),
-        "PositionX" => (AudioBindCombine.Add, -100.0, 100.0),
-        "PositionY" => (AudioBindCombine.Add, -100.0, 100.0),
-        _ => (AudioBindCombine.Add, 0.0, 1.0)
-    };
+        if (clip is not null && TryParseEffectParameter(parameter, out var kind, out var isAmount))
+        {
+            var effect = clip.Effects.FirstOrDefault(e => e.Kind == kind);
+            var definition = EffectDefinitions.Get(kind);
+            if (effect is not null && definition is not null)
+            {
+                if (isAmount)
+                    return (AudioBindCombine.Add, effect.Amount, definition.AmountMax);
+                if (definition.RadiusMax is { } radiusMax)
+                    return (AudioBindCombine.Add, effect.Radius, radiusMax);
+            }
+        }
+        return parameter switch
+        {
+            "Opacity" => (AudioBindCombine.Override, 0.0, 1.0),
+            "Scale" => (AudioBindCombine.Add, 1.0, 1.12),
+            "Rotation" => (AudioBindCombine.Add, -10.0, 10.0),
+            "PositionX" => (AudioBindCombine.Add, -100.0, 100.0),
+            "PositionY" => (AudioBindCombine.Add, -100.0, 100.0),
+            _ => (AudioBindCombine.Add, 0.0, 1.0)
+        };
+    }
 
     /// <summary>音連動バインドを削除する。</summary>
     public void DeleteAudioBinding(AudioBindingRow row)
@@ -1778,16 +1596,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// バインドの音源になっている全クリップの音声解析が終わるまで待つ（書き出し前など）。
-    /// 解析に失敗しても例外は出さない（そのバインドは無音扱いになる）。
+    /// バインドと可視化の音源になっている全クリップの音声解析が終わるまで待つ（書き出し前など）。
+    /// 解析に失敗しても例外は出さない（そのバインド・可視化は無音扱いになる）。
     /// </summary>
     public async Task EnsureBindingAnalysesAsync()
     {
-        var sources = Project.Tracks.SelectMany(t => t.Clips)
+        var sourceIds = Project.Tracks.SelectMany(t => t.Clips)
             .SelectMany(c => c.AudioBindings)
             .Where(b => b.Enabled && !string.IsNullOrEmpty(b.SourceClipId))
             .Select(b => b.SourceClipId)
+            .Concat(Project.Tracks.SelectMany(t => t.Clips)
+                .Where(c => c.Visualization is not null)
+                .Select(c => c.Visualization!.SourceClipId))
+            .Where(id => !string.IsNullOrEmpty(id))
             .Distinct()
+            .ToList();
+        var sources = sourceIds
             .Select(id => Project.Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == id))
             .Where(c => c is not null && !string.IsNullOrEmpty(c!.SourcePath))
             .Select(c => c!)
@@ -1800,7 +1624,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
             catch
             {
-                // 解析失敗はバインドが無音扱いになるだけ。StatusMessage で通知済み。
+                // 解析失敗はバインド・可視化が無音扱いになるだけ。StatusMessage で通知済み。
             }
         }
     }
@@ -1893,90 +1717,101 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>元に戻せるか（アンドゥスタックが空でないか）。メニューの有効化に使う。</summary>
-    public bool CanUndo => _undoStack.Count > 0;
+    public bool CanUndo => _session.CanUndo;
 
     /// <summary>やり直せるか（リドゥスタックが空でないか）。メニューの有効化に使う。</summary>
-    public bool CanRedo => _redoStack.Count > 0;
+    public bool CanRedo => _session.CanRedo;
 
     /// <summary>
     /// 変更操作の直前に呼ぶ。変更前のプロジェクト全体を JSON でスナップショットし、
     /// アンドゥスタックに積む。新しい編集なのでリドゥスタックは空になる。
     /// ドラッグのような連続操作では、操作の開始時に1回だけ呼ぶこと。
     /// </summary>
-    public void BeginEdit()
-    {
-        _undoStack.Add(ProjectStore.Serialize(Project));
-        if (_undoStack.Count > MaxUndoSteps)
-            _undoStack.RemoveAt(0); // 古い方から捨てる。
-        _redoStack.Clear();
-        RaiseUndoStateChanged();
-    }
+    public void BeginEdit() => _session.BeginEdit();
 
     /// <summary>1つ前の状態に戻す。スタックが空なら何もしない。</summary>
-    public void Undo()
-    {
-        if (_undoStack.Count == 0)
-            return;
-        _redoStack.Add(ProjectStore.Serialize(Project));
-        var json = _undoStack[^1];
-        _undoStack.RemoveAt(_undoStack.Count - 1);
-        RestoreSnapshot(json);
-        StatusMessage = "元に戻しました。";
-    }
+    public void Undo() => _session.Undo();
 
     /// <summary>元に戻した操作をやり直す。スタックが空なら何もしない。</summary>
-    public void Redo()
-    {
-        if (_redoStack.Count == 0)
-            return;
-        _undoStack.Add(ProjectStore.Serialize(Project));
-        var json = _redoStack[^1];
-        _redoStack.RemoveAt(_redoStack.Count - 1);
-        RestoreSnapshot(json);
-        StatusMessage = "やり直しました。";
-    }
+    public void Redo() => _session.Redo();
 
     /// <summary>プロジェクトの読み込み時に両スタックを空にする。</summary>
-    public void ClearUndoHistory()
+    public void ClearUndoHistory() => _session.ClearUndoHistory();
+
+    /// <summary>プロジェクトをファイルへ保存する（名前を付けて保存にも使う）。</summary>
+    public void SaveProject(string path) => _session.SaveProject(path);
+
+    /// <summary>プロジェクトファイルを読み込む。自動保存ファイルがあれば復旧待ちにする。</summary>
+    public void LoadProject(string path) => _session.LoadProject(path);
+
+    /// <summary>本ファイルより新しい自動保存ファイルの内容でプロジェクトを復旧する。</summary>
+    public void RecoverFromAutosave() => _session.RecoverFromAutosave();
+
+    /// <summary>自動保存ファイルを破棄する（復旧しないと決めたとき）。</summary>
+    public void DiscardAutosave() => _session.DiscardAutosave();
+
+    // ---- 自動保存 ----
+
+    /// <summary>アプリ設定（自動保存の ON/OFF と間隔）。%APPDATA% の settings.json に保存される。</summary>
+    public AppSettings Settings => _session.Settings;
+
+    /// <summary>現在開いているプロジェクトファイルのパス。未保存（新規）の場合は null（自動保存はしない）。</summary>
+    public string? CurrentProjectPath => _session.CurrentProjectPath;
+
+    /// <summary>プロジェクトファイルのパスが決まっているか（保存済み・開いたプロジェクトか）。</summary>
+    public bool HasProjectPath => _session.HasProjectPath;
+
+    /// <summary>自動保存する（既定はオン）。変えると設定ファイルに保存される（保存に失敗しても切り替え自体は有効）。</summary>
+    public bool AutosaveEnabled
     {
-        _undoStack.Clear();
-        _redoStack.Clear();
-        RaiseUndoStateChanged();
+        get => _session.AutosaveEnabled;
+        set => _session.AutosaveEnabled = value;
     }
 
-    /// <summary>スナップショットからプロジェクトを復元し、画面を更新する。</summary>
-    private void RestoreSnapshot(string json)
-    {
-        IsPlaying = false; // 再生中なら止める（復元したプロジェクトと音声がずれるため）。
-        Project = ProjectStore.Deserialize(json);
-        SelectedClip = null; // 復元前のクリップ参照は古くなるので選択を外す。
-        // 再生ヘッドが復元後の長さを超えていたら末尾に丸める。
-        PlayheadSeconds = Math.Min(PlayheadSeconds, Project.DurationSeconds);
-        RaiseUndoStateChanged();
-    }
+    /// <summary>自動保存の間隔（分、1〜60）。</summary>
+    public int AutosaveIntervalMinutes => _session.AutosaveIntervalMinutes;
 
-    private void RaiseUndoStateChanged()
-    {
-        OnPropertyChanged(nameof(CanUndo));
-        OnPropertyChanged(nameof(CanRedo));
-    }
+    /// <summary>自動保存の間隔を変える（1〜60分に丸める）。変えると設定ファイルに保存され、タイマーの間隔も変わる（保存に失敗しても変更自体は有効）。</summary>
+    public void SetAutosaveIntervalMinutes(int minutes) => _session.SetAutosaveIntervalMinutes(minutes);
 
-    public void SaveProject(string path)
-    {
-        ProjectStore.Save(path, Project);
-        StatusMessage = $"保存しました：{path}";
-    }
+    /// <summary>自動保存の状態表示（ステータスバーに出す）。</summary>
+    public string AutosaveStatus => _session.AutosaveStatus;
 
-    public void LoadProject(string path)
+    /// <summary>本ファイルより新しい自動保存ファイルがあるか（「自動保存から復旧」メニューの有効化に使う）。</summary>
+    public bool HasRecoveryAutosave => _session.HasRecoveryAutosave;
+
+    /// <summary>自動保存ファイルについての説明文（例：更新日時と復旧方法）。無ければ空。</summary>
+    public string AutosaveInfo => _session.AutosaveInfo;
+
+    /// <summary>
+    /// 今のプロジェクトを自動保存ファイルへ保存する（タイマー・終了時に呼ぶ）。
+    /// 本ファイルは触らない。内容が前回の自動保存（または明示保存）と同じなら書き直さない。
+    /// 復旧待ち・未保存・自動保存オフのときは何もしない。失敗しても例外は出さない。
+    /// </summary>
+    public void SaveAutosaveNow() => _session.SaveAutosaveNow();
+
+    // ---- IProjectSessionHost / IDetectionHost の実装（セッション・検出からの委譲先） ----
+
+    void IProjectSessionHost.SetProject(EditorProject project) => Project = project;
+
+    void IProjectSessionHost.SetStatusMessage(string message) => StatusMessage = message;
+
+    void IDetectionHost.SetStatusMessage(string message) => StatusMessage = message;
+
+    void IProjectSessionHost.OnProjectPathChanged() => UpdateProjectCacheDirectories();
+
+    /// <summary>
+    /// 解析キャッシュの保存先を今のプロジェクトに合わせる。
+    /// プロジェクトファイルの隣の「プロジェクト名.cache」フォルダ。
+    /// 未保存の場合は null（メモリのみ・永続化しない）。
+    /// </summary>
+    private void UpdateProjectCacheDirectories()
     {
-        IsPlaying = false;
-        ClearUndoHistory();
-        Project = ProjectStore.Load(path);
-        SelectedClip = null;
-        PlayheadSeconds = 0;
-        StatusMessage = $"開きました：{path}";
-        // バインドの音源解析を裏で走らせておく（終わればプレビューに反映される）。
-        _ = EnsureBindingAnalysesAsync();
+        var cacheDirectory = _session.CurrentProjectPath is null
+            ? null
+            : AudioAnalysisCache.GetCacheDirectory(_session.CurrentProjectPath);
+        _bandProvider.CacheDirectory = cacheDirectory;
+        _waveformCache.CacheDirectory = cacheDirectory;
     }
 
     /// <summary>タイムライン全体を MP4 に書き出す。バインドの音源解析が終わるまで待ってから描き始める。</summary>
@@ -2012,6 +1847,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(Project));
         OnPropertyChanged(nameof(TransitionHint));
         OnPropertyChanged(nameof(AudioBindingHint));
+        OnPropertyChanged(nameof(VisualizationHint));
         OnPropertyChanged(nameof(AudioSourceClips));
         PreviewInvalidated?.Invoke(this, EventArgs.Empty);
     }

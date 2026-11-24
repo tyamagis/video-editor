@@ -29,17 +29,21 @@ public partial class App : Application
         var thumbnailService = new ThumbnailService(ffmpegSettings);
         var exportService = new ExportService(ffmpegSettings);
         var waveformReader = new WaveformReader();
+        // 波形のディスクキャッシュ。保存先（プロジェクトのキャッシュフォルダ）は
+        // プロジェクトを開く・保存するたびに ViewModel が設定し直す。
+        var waveformCache = new WaveformCache(waveformReader);
         var beatAnalyzer = new AudioBeatAnalyzer();
+        var silenceDetector = new SilenceDetector();
         var bandProvider = new AudioBandEnergyProvider();
         _streamingFrameSource = new StreamingFrameSource(ffmpegSettings, mediaProbe);
 
-        IFrameRenderer frameRenderer = new TimelineFrameRenderer(thumbnailService, _streamingFrameSource, bandProvider);
+        IFrameRenderer frameRenderer = new TimelineFrameRenderer(thumbnailService, _streamingFrameSource, bandProvider, bandProvider);
         var previewRenderer = new PreviewRenderer(frameRenderer);
         ITimelineExporter timelineExporter = new FrameSequenceExporter(frameRenderer, ffmpegSettings, mediaProbe);
 
         var viewModel = new MainViewModel(
-            mediaProbe, thumbnailService, exportService, waveformReader,
-            previewRenderer, timelineExporter, ffmpegSettings, beatAnalyzer, bandProvider);
+            mediaProbe, exportService, waveformCache,
+            previewRenderer, timelineExporter, ffmpegSettings, beatAnalyzer, bandProvider, silenceDetector);
 
         var window = new MainWindow
         {

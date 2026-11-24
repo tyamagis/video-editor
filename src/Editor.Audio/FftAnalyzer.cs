@@ -75,14 +75,14 @@ public sealed class FftAnalyzer
 }
 
 /// <summary>
-/// Core の IAudioBandEnergyProvider の実装。フェーズ2のバインドと可視化が使う。
+/// Core の IAudioBandEnergyProvider / IAudioVisualizationProvider の実装。フェーズ2のバインドと可視化が使う。
 /// 音声ファイル1つにつき FFT フレーム列（帯域エネルギー用）と間引きステレオ波形
 /// （リサジュー用）を1回だけ解析し、キャッシュする。同じファイルを使うクリップは
 /// 解析結果を共有する（クリップId → ファイルパスの対応だけ持つ）。
 /// 解析結果は公開後は不変なので、GetBandEnergy などの読み取りはスレッドセーフ
 /// （プレビューと書き出しが別スレッドから読んでも同じ値を返す）。
 /// </summary>
-public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvider
+public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvider, Editor.Core.IAudioVisualizationProvider
 {
     /// <summary>帯域エネルギーの解析フレームレートの上限。30Hz で十分な時間分解能がある。</summary>
     private const int MaxAnalysisFrameRate = 30;
@@ -97,6 +97,13 @@ public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvid
     private const int SmoothingFrames = 3;
 
     private readonly FftAnalyzer _analyzer = new();
+
+    /// <summary>
+    /// 解析キャッシュの保存先（プロジェクトのキャッシュフォルダ）。
+    /// null ならメモリのみで永続化しない（プロジェクト未保存時など）。
+    /// プロジェクトの切り替え時に ViewModel が設定し直す。
+    /// </summary>
+    public string? CacheDirectory { get; set; }
 
     /// <summary>ファイル1つ分の解析結果。公開後は不変。</summary>
     private sealed class Analysis
@@ -137,20 +144,48 @@ public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvid
         if (!File.Exists(sourcePath))
             throw new FileNotFoundException("音声ファイルが見つかりません。", sourcePath);
 
+        // 解析フレームレートは 1〜30fps に丸める（AnalyzeFile と同じ丸め）。
+        // メモリ・ディスクのどちらの照合も、この丸めた値で比べる。
+        var analysisRate = Math.Clamp(frameRate, 1, MaxAnalysisFrameRate);
         var info = new FileInfo(sourcePath);
         lock (_gate)
         {
-            // 同じファイル（サイズ・更新日時が同じ）なら解析し直さない。
+            // 同じファイル（サイズ・更新日時・フレームレートが同じ）なら解析し直さない。
             if (_byPath.TryGetValue(sourcePath, out var existing)
                 && existing.Length == info.Length
-                && existing.LastWriteTimeUtc == info.LastWriteTimeUtc)
+                && existing.LastWriteTimeUtc == info.LastWriteTimeUtc
+                && Math.Abs(existing.FrameRate - analysisRate) < 1e-9)
             {
                 _clipToPath[clipId] = sourcePath;
                 return;
             }
         }
 
-        var analysis = AnalyzeFile(sourcePath, info, frameRate);
+        // ディスクキャッシュ（プロジェクトのキャッシュフォルダ）があれば使う。
+        // 壊れている・古い・条件が違う場合は null が返るので、そのまま再解析する。
+        Analysis? analysis = null;
+        if (CacheDirectory is not null)
+        {
+            var cached = AudioAnalysisCache.TryLoad(sourcePath, analysisRate, FftSize, CacheDirectory);
+            if (cached is not null)
+                analysis = FromCached(cached);
+        }
+        var fromCache = analysis is not null;
+
+        analysis ??= AnalyzeFile(sourcePath, info, analysisRate);
+
+        // 今回解析したものだけディスクキャッシュに保存する（失敗しても編集は続ける）。
+        if (CacheDirectory is not null && !fromCache)
+        {
+            try
+            {
+                AudioAnalysisCache.Save(ToCached(analysis), CacheDirectory);
+            }
+            catch
+            {
+                // キャッシュの保存失敗で解析結果を捨てない（メモリの解析結果は使える）。
+            }
+        }
 
         lock (_gate)
         {
@@ -158,6 +193,37 @@ public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvid
             _clipToPath[clipId] = sourcePath;
         }
     }
+
+    /// <summary>ディスクキャッシュの内容からメモリ用の解析結果を作る。</summary>
+    private static Analysis FromCached(CachedAudioAnalysis cached) => new()
+    {
+        SourcePath = cached.SourcePath,
+        Length = cached.Length,
+        LastWriteTimeUtc = cached.LastWriteTimeUtc,
+        SampleRate = cached.SampleRate,
+        FrameRate = cached.FrameRate,
+        DurationSeconds = cached.DurationSeconds,
+        Magnitudes = cached.Magnitudes.ToList(),
+        StereoLeft = cached.StereoLeft,
+        StereoRight = cached.StereoRight,
+        StereoRate = cached.StereoRate
+    };
+
+    /// <summary>メモリ用の解析結果をディスクキャッシュ用の形に変換する。</summary>
+    private static CachedAudioAnalysis ToCached(Analysis analysis) => new()
+    {
+        SourcePath = analysis.SourcePath,
+        Length = analysis.Length,
+        LastWriteTimeUtc = analysis.LastWriteTimeUtc,
+        SampleRate = analysis.SampleRate,
+        FrameRate = analysis.FrameRate,
+        DurationSeconds = analysis.DurationSeconds,
+        FftSize = FftSize,
+        StereoRate = analysis.StereoRate,
+        Magnitudes = analysis.Magnitudes.ToArray(),
+        StereoLeft = analysis.StereoLeft,
+        StereoRight = analysis.StereoRight
+    };
 
     /// <summary>ファイル全体を解析する（FFT フレーム列＋間引きステレオ波形）。重い処理。</summary>
     private Analysis AnalyzeFile(string sourcePath, FileInfo info, double frameRate)
@@ -306,9 +372,19 @@ public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvid
     /// <summary>
     /// 指定時刻のスペクトルを対数間隔の帯域に分けて返す（各値 0.0〜1.0）。
     /// そのフレームで最も強い帯域を 1.0 とし、平方根で見た目を広げる。
+    /// プレビュー用オーバーレイが使う（対数間隔）。
     /// </summary>
     public double[] GetSpectrumBands(
         string clipId, double timeSeconds, int bandCount, double lowHz, double highHz)
+        => GetSpectrumBands(clipId, timeSeconds, bandCount, lowHz, highHz, logarithmic: true);
+
+    /// <summary>
+    /// 指定時刻のスペクトルを帯域に分けて返す（各値 0.0〜1.0）。
+    /// そのフレームで最も強い帯域を 1.0 とし、平方根で見た目を広げる。
+    /// logarithmic が true なら対数間隔、false なら線形間隔の帯域境界を使う。
+    /// </summary>
+    public double[] GetSpectrumBands(
+        string clipId, double timeSeconds, int bandCount, double lowHz, double highHz, bool logarithmic)
     {
         var result = new double[Math.Max(1, bandCount)];
         var analysis = FindAnalysis(clipId);
@@ -319,20 +395,27 @@ public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvid
         index = Math.Clamp(index, 0, analysis.Magnitudes.Count - 1);
         var magnitudes = analysis.Magnitudes[index];
 
-        // 対数間隔の帯域境界（Hz）。
+        // 帯域境界（Hz）。対数間隔か線形間隔かで分け方が変わる。
         var edges = new double[result.Length + 1];
         var low = Math.Max(1, lowHz);
         var high = Math.Max(low + 1, highHz);
-        var ratio = Math.Pow(high / low, 1.0 / result.Length);
-        for (var b = 0; b <= result.Length; b++)
-            edges[b] = low * Math.Pow(ratio, b);
+        if (logarithmic)
+        {
+            var ratio = Math.Pow(high / low, 1.0 / result.Length);
+            for (var b = 0; b <= result.Length; b++)
+                edges[b] = low * Math.Pow(ratio, b);
+        }
+        else
+        {
+            for (var b = 0; b <= result.Length; b++)
+                edges[b] = low + (high - low) * b / result.Length;
+        }
 
         var binHz = (double)analysis.SampleRate / FftSize;
         double max = 0;
         for (var b = 0; b < result.Length; b++)
         {
-            var firstBin = Math.Max(0, (int)Math.Ceiling(edges[b] / binHz));
-            var lastBin = Math.Min(magnitudes.Length - 1, (int)Math.Floor(edges[b + 1] / binHz));
+            var (firstBin, lastBin) = BinRange(magnitudes.Length, binHz, edges[b], edges[b + 1]);
             double bandSum = 0;
             for (var i = firstBin; i <= lastBin; i++)
                 bandSum += magnitudes[i];
@@ -375,12 +458,19 @@ public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvid
         return (left, right);
     }
 
+    /// <summary>周波数帯 [lowHz, highHz] に対応する FFT ビンの範囲。RawBandEnergy と GetSpectrumBands の共通定義。</summary>
+    private static (int FirstBin, int LastBin) BinRange(int binCount, double binHz, double lowHz, double highHz)
+    {
+        var firstBin = Math.Max(0, (int)Math.Ceiling(lowHz / binHz));
+        var lastBin = Math.Min(binCount - 1, (int)Math.Floor(highHz / binHz));
+        return (firstBin, lastBin);
+    }
+
     /// <summary>1フレーム分の帯域エネルギー（平滑化なし）。ビン周波数から直接計算する。</summary>
     private static double RawBandEnergy(float[] magnitudes, int sampleRate, double lowHz, double highHz)
     {
         var binHz = (double)sampleRate / FftSize;
-        var firstBin = Math.Max(0, (int)Math.Ceiling(lowHz / binHz));
-        var lastBin = Math.Min(magnitudes.Length - 1, (int)Math.Floor(highHz / binHz));
+        var (firstBin, lastBin) = BinRange(magnitudes.Length, binHz, lowHz, highHz);
         double total = 0, band = 0;
         for (var i = 0; i < magnitudes.Length; i++)
         {

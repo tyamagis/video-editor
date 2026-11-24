@@ -23,8 +23,11 @@ public sealed class EvaluatedClipState
     /// <summary>ブレンドモード（クリップの固定値）。</summary>
     public BlendMode BlendMode { get; init; } = BlendMode.Normal;
 
-    /// <summary>クリップに付いているエフェクト（固定値の一覧）。</summary>
+    /// <summary>クリップに付いているエフェクト（時刻 t で評価済みの値の一覧。キーフレームが無ければ固定値のまま）。</summary>
     public IReadOnlyList<ClipEffect> Effects { get; init; } = Array.Empty<ClipEffect>();
+
+    /// <summary>可視化クリップの設定（時刻 t で評価済み。可視化クリップでなければ null）。</summary>
+    public VisualizationSettings? Visualization { get; init; }
 }
 
 /// <summary>キーフレームと固定プロパティから時刻 t の状態を計算する。</summary>
@@ -49,8 +52,83 @@ public static class TimelineEvaluator
             Brightness = clip.Brightness,
             Contrast = clip.Contrast,
             BlendMode = clip.BlendMode,
-            Effects = clip.Effects
+            Effects = EvaluateEffects(clip, timeSeconds, project, audio),
+            Visualization = EvaluateVisualization(clip, local)
         };
+    }
+
+    /// <summary>
+    /// 可視化設定のキーフレーム化できる項目（Gain / LineWidth / WindowSeconds / TrailSeconds）を
+    /// 時刻 t（クリップ相対秒）で評価する。キーフレームトラック "Visualization:{項目}" が無ければ
+    /// 固定値のままなので、旧プロジェクトはそのまま動く。
+    /// キーフレームがある場合だけコピーを作り、無いものは元のインスタンスを返す。
+    /// </summary>
+    private static VisualizationSettings? EvaluateVisualization(Clip clip, double localTimeSeconds)
+    {
+        var settings = clip.Visualization;
+        if (settings is null)
+            return null;
+
+        var gain = clip.EvaluateParameter(
+            VisualizationSettings.KeyframeParameterName("Gain"), localTimeSeconds, settings.Gain);
+        var lineWidth = clip.EvaluateParameter(
+            VisualizationSettings.KeyframeParameterName("LineWidth"), localTimeSeconds, settings.LineWidth);
+        var windowSeconds = clip.EvaluateParameter(
+            VisualizationSettings.KeyframeParameterName("WindowSeconds"), localTimeSeconds, settings.WindowSeconds);
+        var trailSeconds = clip.EvaluateParameter(
+            VisualizationSettings.KeyframeParameterName("TrailSeconds"), localTimeSeconds, settings.TrailSeconds);
+        if (Math.Abs(gain - settings.Gain) < 1e-9
+            && Math.Abs(lineWidth - settings.LineWidth) < 1e-9
+            && Math.Abs(windowSeconds - settings.WindowSeconds) < 1e-9
+            && Math.Abs(trailSeconds - settings.TrailSeconds) < 1e-9)
+        {
+            return settings;
+        }
+
+        var copy = settings.Clone();
+        copy.Gain = VisualizationSettings.ClampGain(gain);
+        copy.LineWidth = VisualizationSettings.ClampLineWidth(lineWidth);
+        copy.WindowSeconds = VisualizationSettings.ClampWindowSeconds(windowSeconds);
+        copy.TrailSeconds = VisualizationSettings.ClampTrailSeconds(trailSeconds);
+        return copy;
+    }
+
+    /// <summary>
+    /// エフェクトの Amount / Radius を時刻 t（タイムライン秒）で評価する。
+    /// まずキーフレームトラック "Effect:{種類}.Amount" / "Effect:{種類}.Radius" で基本値を求め、
+    /// そのパラメータの有効なバインドがあれば帯域エネルギーで動かす（基本パラメータと
+    /// 同じ合成順序：キーフレーム → バインド → 種類の範囲に丸める）。
+    /// キーフレームもバインドも無ければ固定値のままなので、旧プロジェクトはそのまま動く。
+    /// 値が変わったエフェクトだけコピーを作り、変わらないものは元のインスタンスを返す。
+    /// </summary>
+    private static IReadOnlyList<ClipEffect> EvaluateEffects(
+        Clip clip, double timeSeconds, EditorProject? project, IAudioBandEnergyProvider? audio)
+    {
+        if (clip.Effects.Count == 0)
+            return Array.Empty<ClipEffect>();
+
+        var local = timeSeconds - clip.StartSeconds;
+        var result = new List<ClipEffect>(clip.Effects.Count);
+        foreach (var effect in clip.Effects)
+        {
+            var amountParameter = ClipEffect.KeyframeParameterName(effect.Kind, isAmount: true);
+            var amount = clip.EvaluateParameter(amountParameter, local, effect.Amount);
+            amount = ApplyAudioBindings(project, clip, amountParameter, timeSeconds, amount, audio);
+            var radiusParameter = ClipEffect.KeyframeParameterName(effect.Kind, isAmount: false);
+            var radius = clip.EvaluateParameter(radiusParameter, local, effect.Radius);
+            radius = ApplyAudioBindings(project, clip, radiusParameter, timeSeconds, radius, audio);
+            if (Math.Abs(amount - effect.Amount) < 1e-9 && Math.Abs(radius - effect.Radius) < 1e-9)
+            {
+                result.Add(effect);
+                continue;
+            }
+
+            var copy = effect.Clone();
+            copy.Amount = ClipEffect.ClampAmount(effect.Kind, amount);
+            copy.Radius = ClipEffect.ClampRadius(effect.Kind, radius);
+            result.Add(copy);
+        }
+        return result;
     }
 
     /// <summary>
@@ -65,6 +143,19 @@ public static class TimelineEvaluator
     {
         var local = timeSeconds - clip.StartSeconds;
         var value = clip.EvaluateParameter(parameterName, local, defaultValue);
+        return ApplyAudioBindings(project, clip, parameterName, timeSeconds, value, audio);
+    }
+
+    /// <summary>
+    /// 指定パラメータの有効なバインドをすべて適用する（キーフレーム値 → バインド合成値）。
+    /// バインドの対象は基本パラメータ（"Opacity" など）とエフェクト量
+    /// （"Effect:{種類}.Amount" / "Effect:{種類}.Radius"）のどちらでもよい。
+    /// 音源クリップが見つからない・解析されていない・その時刻に流れていないバインドは無視する。
+    /// </summary>
+    private static double ApplyAudioBindings(
+        EditorProject? project, Clip clip, string parameterName,
+        double timeSeconds, double value, IAudioBandEnergyProvider? audio)
+    {
         if (audio is null || project is null || clip.AudioBindings.Count == 0)
             return value;
 
@@ -115,6 +206,22 @@ public static class TimelineEvaluator
     }
 
     /// <summary>
+    /// クリップの開始側ディゾルブの区間（境界を中心に前後 D/2 ずつ）。
+    /// ディゾルブがない・隣り合っていない・長さが 0 の場合は null。
+    /// GetTransitionFactor と IsInTransitionZone の共通定義（区間の定義はここだけ）。
+    /// </summary>
+    private static (double Start, double End)? GetDissolveZone(IReadOnlyList<Clip> clips, int index)
+    {
+        if (index <= 0 || clips[index].TransitionKind != TransitionKind.Dissolve)
+            return null;
+        var duration = GetEffectiveTransitionDuration(clips[index - 1], clips[index]);
+        if (duration <= 0)
+            return null;
+        var start = clips[index].StartSeconds - duration / 2;
+        return (start, start + duration);
+    }
+
+    /// <summary>
     /// クリップのトランジションによる不透明度の倍率を返す（1.0 が通常）。
     /// 開始側にディゾルブがあるクリップは、境界を中心に前後 D/2 ずつの区間でフェードインする。
     /// 前のクリップは減光しない：不透明度で重ねる描画では、前のクリップを薄くすると
@@ -123,40 +230,24 @@ public static class TimelineEvaluator
     /// </summary>
     private static double GetTransitionFactor(IReadOnlyList<Clip> clips, int index, double timeSeconds)
     {
-        var clip = clips[index];
-        if (clip.TransitionKind == TransitionKind.Dissolve && index > 0)
-        {
-            var duration = GetEffectiveTransitionDuration(clips[index - 1], clip);
-            if (duration > 0)
-            {
-                var zoneStart = clip.StartSeconds - duration / 2;
-                var zoneEnd = clip.StartSeconds + duration / 2;
-                if (timeSeconds >= zoneStart && timeSeconds <= zoneEnd)
-                    return Math.Clamp((timeSeconds - zoneStart) / duration, 0, 1);
-            }
-        }
+        var zone = GetDissolveZone(clips, index);
+        if (zone is null)
+            return 1.0;
+        if (timeSeconds >= zone.Value.Start && timeSeconds <= zone.Value.End)
+            return Math.Clamp((timeSeconds - zone.Value.Start) / (zone.Value.End - zone.Value.Start), 0, 1);
         return 1.0;
     }
 
     /// <summary>クリップがトランジション区間に入っているか（開始側のフェードイン区間、または次のクリップへのフェードアウト区間）。</summary>
     private static bool IsInTransitionZone(IReadOnlyList<Clip> clips, int index, double timeSeconds)
     {
-        var clip = clips[index];
-        if (clip.TransitionKind == TransitionKind.Dissolve && index > 0)
+        var zone = GetDissolveZone(clips, index);
+        if (zone is not null && timeSeconds >= zone.Value.Start && timeSeconds <= zone.Value.End)
+            return true;
+        if (index + 1 < clips.Count)
         {
-            var duration = GetEffectiveTransitionDuration(clips[index - 1], clip);
-            if (duration > 0
-                && timeSeconds >= clip.StartSeconds - duration / 2
-                && timeSeconds <= clip.StartSeconds + duration / 2)
-                return true;
-        }
-        if (index + 1 < clips.Count && clips[index + 1].TransitionKind == TransitionKind.Dissolve)
-        {
-            var next = clips[index + 1];
-            var duration = GetEffectiveTransitionDuration(clip, next);
-            if (duration > 0
-                && timeSeconds >= next.StartSeconds - duration / 2
-                && timeSeconds <= next.StartSeconds + duration / 2)
+            var nextZone = GetDissolveZone(clips, index + 1);
+            if (nextZone is not null && timeSeconds >= nextZone.Value.Start && timeSeconds <= nextZone.Value.End)
                 return true;
         }
         return false;
