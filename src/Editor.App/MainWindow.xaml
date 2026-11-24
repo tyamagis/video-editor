@@ -279,34 +279,7 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="24" />
                           </Grid.ColumnDefinitions>
-                          <ComboBox Grid.Column="0" SelectedValue="{Binding Kind, Mode=TwoWay}" SelectedValuePath="Tag" Margin="0,0,4,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
-                            <ComboBoxItem Content="ブラー" Tag="{x:Static core:EffectKind.Blur}" />
-                            <ComboBoxItem Content="グロー" Tag="{x:Static core:EffectKind.Glow}" />
-                            <ComboBoxItem Content="RGBシフト" Tag="{x:Static core:EffectKind.RgbShift}" />
-                            <ComboBoxItem Content="スライス" Tag="{x:Static core:EffectKind.Slice}" />
-                            <ComboBoxItem Content="ワープ（波）" Tag="{x:Static core:EffectKind.Warp}" />
-                            <ComboBoxItem Content="クロマキー" Tag="{x:Static core:EffectKind.ChromaKey}" />
-                            <ComboBoxItem Content="モザイク" Tag="{x:Static core:EffectKind.Mosaic}" />
-                            <ComboBoxItem Content="ビネット" Tag="{x:Static core:EffectKind.Vignette}" />
-                            <ComboBoxItem Content="エコー（残像）" Tag="{x:Static core:EffectKind.Echo}" />
-                            <ComboBoxItem Content="色反転" Tag="{x:Static core:EffectKind.Invert}" />
-                            <ComboBoxItem Content="色相" Tag="{x:Static core:EffectKind.HueShift}" />
-                            <ComboBoxItem Content="彩度" Tag="{x:Static core:EffectKind.Saturation}" />
-                            <ComboBoxItem Content="モノクロ" Tag="{x:Static core:EffectKind.Monochrome}" />
-                            <ComboBoxItem Content="セピア" Tag="{x:Static core:EffectKind.Sepia}" />
-                            <ComboBoxItem Content="ポスタリゼーション" Tag="{x:Static core:EffectKind.Posterize}" />
-                            <ComboBoxItem Content="万華鏡" Tag="{x:Static core:EffectKind.Kaleidoscope}" />
-                            <ComboBoxItem Content="ノイズ" Tag="{x:Static core:EffectKind.Noise}" />
-                            <ComboBoxItem Content="色収差" Tag="{x:Static core:EffectKind.ChromaticAberration}" />
-                            <ComboBoxItem Content="魚眼" Tag="{x:Static core:EffectKind.Fisheye}" />
-                            <ComboBoxItem Content="VHSグリッチ" Tag="{x:Static core:EffectKind.VhsGlitch}" />
-                            <ComboBoxItem Content="ドロップシャドウ" Tag="{x:Static core:EffectKind.DropShadow}" />
-                            <ComboBoxItem Content="フィルムグレイン" Tag="{x:Static core:EffectKind.FilmGrain}" />
-                            <ComboBoxItem Content="ズームブラー" Tag="{x:Static core:EffectKind.ZoomBlur}" />
-                            <ComboBoxItem Content="モーションブラー" Tag="{x:Static core:EffectKind.MotionBlur}" />
-                            <ComboBoxItem Content="輝度キー" Tag="{x:Static core:EffectKind.LuminanceKey}" />
-                            <ComboBoxItem Content="トーンカーブ" Tag="{x:Static core:EffectKind.ToneCurve}" />
-                          </ComboBox>
+                          <ComboBox Grid.Column="0" ItemsSource="{x:Static core:EffectDefinitions.AllDefinitions}" DisplayMemberPath="DisplayName" SelectedValue="{Binding Kind, Mode=TwoWay}" SelectedValuePath="Kind" Margin="0,0,4,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
                           <Button Grid.Column="1" Content="×" Padding="0" Click="DeleteEffectButton_Click" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
                         </Grid>
                         <Grid Margin="0,4,0,0">
@@ -320,6 +293,14 @@
                           <TextBox Grid.Column="1" Text="{Binding Amount, UpdateSourceTrigger=PropertyChanged}" GotFocus="EditableField_GotFocus" Margin="0,0,4,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
                           <TextBlock Grid.Column="2" Text="{Binding RadiusLabel}" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="{StaticResource AppForeground}" Visibility="{Binding ShowRadius, Converter={StaticResource BoolToVis}}" />
                           <TextBox Grid.Column="3" Text="{Binding Radius, UpdateSourceTrigger=PropertyChanged}" GotFocus="EditableField_GotFocus" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" Visibility="{Binding ShowRadius, Converter={StaticResource BoolToVis}}" />
+                        </Grid>
+                        <Grid Margin="0,4,0,0" Visibility="{Binding ShowMidtones, Converter={StaticResource BoolToVis}}">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Grid.Column="0" Text="{Binding MidtonesLabel}" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="{StaticResource AppForeground}" />
+                          <TextBox Grid.Column="1" Text="{Binding Midtones, UpdateSourceTrigger=PropertyChanged}" GotFocus="EditableField_GotFocus" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
                         </Grid>
                         <ComboBox Margin="0,4,0,0" SelectedValue="{Binding KeyColorHex, Mode=TwoWay}" SelectedValuePath="Tag" Visibility="{Binding ShowKeyColor, Converter={StaticResource BoolToVis}}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
                           <ComboBoxItem Content="キー色：緑" Tag="#00FF00" />
@@ -335,37 +316,10 @@
                   <ColumnDefinition Width="*" />
                   <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <ComboBox Grid.Column="0" SelectedValue="{Binding NewEffectKind, Mode=TwoWay}" SelectedValuePath="Tag" Margin="0,0,4,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
-                  <ComboBoxItem Content="ブラー" Tag="{x:Static core:EffectKind.Blur}" />
-                  <ComboBoxItem Content="グロー" Tag="{x:Static core:EffectKind.Glow}" />
-                  <ComboBoxItem Content="RGBシフト" Tag="{x:Static core:EffectKind.RgbShift}" />
-                  <ComboBoxItem Content="スライス" Tag="{x:Static core:EffectKind.Slice}" />
-                  <ComboBoxItem Content="ワープ（波）" Tag="{x:Static core:EffectKind.Warp}" />
-                  <ComboBoxItem Content="クロマキー" Tag="{x:Static core:EffectKind.ChromaKey}" />
-                  <ComboBoxItem Content="モザイク" Tag="{x:Static core:EffectKind.Mosaic}" />
-                  <ComboBoxItem Content="ビネット" Tag="{x:Static core:EffectKind.Vignette}" />
-                  <ComboBoxItem Content="エコー（残像）" Tag="{x:Static core:EffectKind.Echo}" />
-                  <ComboBoxItem Content="色反転" Tag="{x:Static core:EffectKind.Invert}" />
-                  <ComboBoxItem Content="色相" Tag="{x:Static core:EffectKind.HueShift}" />
-                  <ComboBoxItem Content="彩度" Tag="{x:Static core:EffectKind.Saturation}" />
-                  <ComboBoxItem Content="モノクロ" Tag="{x:Static core:EffectKind.Monochrome}" />
-                  <ComboBoxItem Content="セピア" Tag="{x:Static core:EffectKind.Sepia}" />
-                  <ComboBoxItem Content="ポスタリゼーション" Tag="{x:Static core:EffectKind.Posterize}" />
-                  <ComboBoxItem Content="万華鏡" Tag="{x:Static core:EffectKind.Kaleidoscope}" />
-                  <ComboBoxItem Content="ノイズ" Tag="{x:Static core:EffectKind.Noise}" />
-                  <ComboBoxItem Content="色収差" Tag="{x:Static core:EffectKind.ChromaticAberration}" />
-                  <ComboBoxItem Content="魚眼" Tag="{x:Static core:EffectKind.Fisheye}" />
-                  <ComboBoxItem Content="VHSグリッチ" Tag="{x:Static core:EffectKind.VhsGlitch}" />
-                  <ComboBoxItem Content="ドロップシャドウ" Tag="{x:Static core:EffectKind.DropShadow}" />
-                  <ComboBoxItem Content="フィルムグレイン" Tag="{x:Static core:EffectKind.FilmGrain}" />
-                  <ComboBoxItem Content="ズームブラー" Tag="{x:Static core:EffectKind.ZoomBlur}" />
-                  <ComboBoxItem Content="モーションブラー" Tag="{x:Static core:EffectKind.MotionBlur}" />
-                  <ComboBoxItem Content="輝度キー" Tag="{x:Static core:EffectKind.LuminanceKey}" />
-                  <ComboBoxItem Content="トーンカーブ" Tag="{x:Static core:EffectKind.ToneCurve}" />
-                </ComboBox>
+                <ComboBox Grid.Column="0" ItemsSource="{x:Static core:EffectDefinitions.AllDefinitions}" DisplayMemberPath="DisplayName" SelectedValue="{Binding NewEffectKind, Mode=TwoWay}" SelectedValuePath="Kind" Margin="0,0,4,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
                 <Button Grid.Column="1" Content="追加" Click="AddEffectButton_Click" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
               </Grid>
-              <TextBlock Text="ブラー：半径(px) ／ グロー：強さ(0-1)・ぼかし半径(px) ／ RGBシフト・スライス：ずれ(px) ／ ワープ：振幅(px)・波長(px) ／ クロマキー：しきい値(0-1)・なめらかさ・キー色 ／ モザイク：ブロック(px) ／ ビネット：強さ(0-1)・広がり ／ エコー：残りやすさ(0-1)・残像の数 ／ 色反転・モノクロ・セピア：強さ(0-1) ／ 色相：回転(度) ／ 彩度：倍率 ／ ポスタリゼーション：階調数 ／ 万華鏡：ズーム・分割数 ／ ノイズ：強さ(0-1)・粒の大きさ(px) ／ 色収差：ずれ(px)・中心の無影響半径 ／ 魚眼：歪み(0-1)・拡大率 ／ VHSグリッチ：強さ(0-1)・走査線の間隔(px) ／ ドロップシャドウ：不透明度(0-1)・ぼかし半径(px) ／ フィルムグレイン：強さ(0-1)・粒の大きさ(px) ／ ズームブラー：強さ(0-1)・サンプル数 ／ モーションブラー：長さ(px)・方向(度) ／ 輝度キー：しきい値(0-1)・なめらかさ ／ トーンカーブ：シャドウ・ハイライト(-1〜1)。エフェクトの量はキーフレーム欄から時刻で動かせます（エフェクトを付けると選択肢に増えます）。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
+              <TextBlock Text="{x:Static core:EffectDefinitions.HelpText}" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
             </StackPanel>
 
             <TextBlock Text="可視化" FontWeight="SemiBold" Margin="0,12,0,4" Foreground="{StaticResource AppForeground}" Visibility="{Binding IsVisualizationClipSelected, Converter={StaticResource BoolToVis}}" />

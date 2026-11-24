@@ -40,6 +40,38 @@ public sealed class EffectDefinitionsTests
         }
     }
 
+    /// <summary>AllDefinitions が全26種を EffectKind の順で並べ、表示名・説明が空でなく重複しないこと（XAML の ComboBox はこの一覧を表示する）。</summary>
+    [Fact]
+    public void AllDefinitions_CoversAllKindsInEnumOrder()
+    {
+        var definitions = EffectDefinitions.AllDefinitions;
+        var kinds = Enum.GetValues<EffectKind>();
+        Assert.Equal(kinds.Length, definitions.Count);
+        Assert.Equal(kinds, definitions.Select(definition => definition.Kind));
+        Assert.Equal(26, definitions.Select(definition => definition.DisplayName).Distinct().Count());
+        foreach (var definition in definitions)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(definition.DisplayName));
+            Assert.False(string.IsNullOrWhiteSpace(definition.Description));
+        }
+    }
+
+    /// <summary>HelpText が全種類の「表示名：説明」を同じ順で含み、キーフレーム注記で終わること（XAML の説明文はこの文字列を表示する）。</summary>
+    [Fact]
+    public void HelpText_ContainsEveryDefinition()
+    {
+        var helpText = EffectDefinitions.HelpText;
+        var index = 0;
+        foreach (var definition in EffectDefinitions.AllDefinitions)
+        {
+            var fragment = $"{definition.DisplayName}：{definition.Description}";
+            var found = helpText.IndexOf(fragment, index, StringComparison.Ordinal);
+            Assert.True(found >= 0, $"HelpText に {fragment} が無い");
+            index = found + fragment.Length;
+        }
+        Assert.EndsWith("エフェクトの量はキーフレーム欄から時刻で動かせます（エフェクトを付けると選択肢に増えます）。", helpText);
+    }
+
     /// <summary>新9種の既定値が Amount / Radius の範囲内であること。</summary>
     [Fact]
     public void NewKinds_DefaultsAreWithinRange()
@@ -160,6 +192,70 @@ public sealed class EffectDefinitionsTests
         // 無音（エネルギー 0）ならキーフレーム値のまま。
         var silent = TimelineEvaluator.EvaluateClip(target, 1, 1.0, project, new FixedEnergyProvider(0.0));
         Assert.Equal(4, silent.Effects[0].Amount);
+    }
+
+    /// <summary>トーンカーブの第3パラメータ（中間調）の定義：ラベル・既定値・範囲がテーブルに載り、他の種類は使わないこと。</summary>
+    [Fact]
+    public void ToneCurve_ThirdParameter_Definition()
+    {
+        var definition = EffectDefinitions.Get(EffectKind.ToneCurve)!;
+        Assert.True(definition.UsesThird);
+        Assert.Equal("中間調", definition.ThirdLabel);
+        Assert.Equal(0, definition.DefaultThird);
+        Assert.Equal(-1, definition.ThirdMin);
+        Assert.Equal(1, definition.ThirdMax);
+        Assert.True(ClipEffect.UsesThird(EffectKind.ToneCurve));
+        Assert.Contains("中間調", definition.Description);
+        foreach (var kind in Enum.GetValues<EffectKind>())
+        {
+            if (kind == EffectKind.ToneCurve)
+                continue;
+            Assert.False(EffectDefinitions.Get(kind)!.UsesThird, kind.ToString());
+        }
+    }
+
+    /// <summary>中間調の丸め：第3パラメータを使う種類は範囲内、使わない種類はそのまま。</summary>
+    [Fact]
+    public void ToneCurve_ClampMidtones()
+    {
+        Assert.Equal(1, ClipEffect.ClampMidtones(EffectKind.ToneCurve, 2));
+        Assert.Equal(-1, ClipEffect.ClampMidtones(EffectKind.ToneCurve, -2));
+        Assert.Equal(0.4, ClipEffect.ClampMidtones(EffectKind.ToneCurve, 0.4));
+        Assert.Equal(5, ClipEffect.ClampMidtones(EffectKind.Blur, 5)); // 使わない種類は丸めない。
+    }
+
+    /// <summary>中間調のキーフレーム（"Effect:ToneCurve.Midtones"）が評価で効き、固定値を上書きすること。</summary>
+    [Fact]
+    public void ToneCurve_MidtonesKeyframeEvaluation()
+    {
+        Assert.Equal("Effect:ToneCurve.Midtones", ClipEffect.KeyframeParameterName(EffectKind.ToneCurve, "Midtones"));
+        var clip = new Clip { StartSeconds = 0, DurationSeconds = 10 };
+        clip.Effects.Add(new ClipEffect { Kind = EffectKind.ToneCurve, Midtones = 0.1 });
+        clip.KeyframeTracks.Add(new KeyframeTrack
+        {
+            ParameterName = "Effect:ToneCurve.Midtones",
+            Keyframes =
+            {
+                new Keyframe(0, 0.1),
+                new Keyframe(2, 0.6)
+            }
+        });
+
+        Assert.Equal(0.1, TimelineEvaluator.EvaluateClip(clip, 0).Effects[0].Midtones, 9);
+        Assert.Equal(0.6, TimelineEvaluator.EvaluateClip(clip, 2).Effects[0].Midtones, 9);
+    }
+
+    /// <summary>中間調のキーフレーム値が範囲を超えていても評価時に丸める。元の固定値は変わらない。</summary>
+    [Fact]
+    public void ToneCurve_MidtonesKeyframe_IsClamped()
+    {
+        var clip = new Clip { StartSeconds = 0, DurationSeconds = 10 };
+        var effect = new ClipEffect { Kind = EffectKind.ToneCurve, Midtones = 0 };
+        clip.Effects.Add(effect);
+        clip.EnsureTrack("Effect:ToneCurve.Midtones").Keyframes.Add(new Keyframe(0, 5));
+
+        Assert.Equal(1.0, TimelineEvaluator.EvaluateClip(clip, 0).Effects[0].Midtones, 9);
+        Assert.Equal(0.0, effect.Midtones, 9);
     }
 
     /// <summary>固定の帯域エネルギーを返すテスト用スタブ。</summary>

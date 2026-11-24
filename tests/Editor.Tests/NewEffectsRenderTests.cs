@@ -22,9 +22,14 @@ public sealed class NewEffectsRenderTests
     {
         public Task<byte[]?> GetFramePngAsync(string sourcePath, double timeSeconds, int maxWidth, CancellationToken ct = default)
         {
-            using var bitmap = sourcePath == "pattern-square"
-                ? BuildSquarePattern()
-                : BuildCirclePattern();
+            using var bitmap = sourcePath switch
+            {
+                "pattern-square" => BuildSquarePattern(),
+                "pattern-gradient" => BuildGradientPattern(),
+                "pattern-white" => BuildWhitePattern(),
+                "pattern-green-square" => BuildGreenSquarePattern(),
+                _ => BuildCirclePattern()
+            };
             using var image = SKImage.FromBitmap(bitmap);
             using var data = image.Encode(SKEncodedImageFormat.Png, 100);
             return Task.FromResult<byte[]?>(data.ToArray());
@@ -51,6 +56,40 @@ public sealed class NewEffectsRenderTests
             canvas.DrawRect(40, 20, 30, 30, paint);
             return bitmap;
         }
+
+        /// <summary>真っ白なフレーム（下のトラック用）。</summary>
+        private static SKBitmap BuildWhitePattern()
+        {
+            var bitmap = new SKBitmap(Width, Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var canvas = new SKCanvas(bitmap);
+            canvas.Clear(SKColors.White);
+            return bitmap;
+        }
+
+        /// <summary>緑背景に白い正方形（40,20)-(70,50)。クロマキーで緑を抜いたドロップシャドウ用。</summary>
+        private static SKBitmap BuildGreenSquarePattern()
+        {
+            var bitmap = new SKBitmap(Width, Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var canvas = new SKCanvas(bitmap);
+            canvas.Clear(new SKColor(0, 255, 0));
+            using var paint = new SKPaint { Color = SKColors.White };
+            canvas.DrawRect(40, 20, 30, 30, paint);
+            return bitmap;
+        }
+
+        /// <summary>左（黒）から右（白）への横グラデーション。画素 x の値は round(x * 255 / 159)。トーンカーブ用。</summary>
+        private static SKBitmap BuildGradientPattern()
+        {
+            var bitmap = new SKBitmap(Width, Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var canvas = new SKCanvas(bitmap);
+            for (var x = 0; x < Width; x++)
+            {
+                var v = (byte)Math.Round(x * 255.0 / (Width - 1));
+                using var paint = new SKPaint { Color = new SKColor(v, v, v) };
+                canvas.DrawRect(x, 0, 1, Height, paint);
+            }
+            return bitmap;
+        }
     }
 
     private static async Task<SKBitmap> RenderAsync(ClipEffect effect, string pattern = "pattern-circle", double timeSeconds = 0.5)
@@ -64,6 +103,36 @@ public sealed class NewEffectsRenderTests
             SourcePath = pattern
         };
         clip.Effects.Add(effect);
+        project.Tracks.Add(new Track { Clips = { clip } });
+        var renderer = new TimelineFrameRenderer(new PatternFrameSource());
+        return await renderer.RenderFrameAsync(project, timeSeconds, Width, Height);
+    }
+
+    /// <summary>
+    /// 下に白い映像クリップ、上に指定パターンの映像クリップを重ねて描く（ドロップシャドウ用）。
+    /// 上のクリップには渡したエフェクトをすべて付ける。
+    /// </summary>
+    private static async Task<SKBitmap> RenderLayeredAsync(
+        IReadOnlyList<ClipEffect> effects, string pattern = "pattern-green-square", double timeSeconds = 0.5)
+    {
+        var project = new EditorProject { Width = Width, Height = Height, FrameRate = 30 };
+        var below = new Clip
+        {
+            Kind = ClipKind.Video,
+            StartSeconds = 0,
+            DurationSeconds = 10,
+            SourcePath = "pattern-white"
+        };
+        project.Tracks.Add(new Track { Clips = { below } });
+        var clip = new Clip
+        {
+            Kind = ClipKind.Video,
+            StartSeconds = 0,
+            DurationSeconds = 10,
+            SourcePath = pattern
+        };
+        foreach (var effect in effects)
+            clip.Effects.Add(effect);
         project.Tracks.Add(new Track { Clips = { clip } });
         var renderer = new TimelineFrameRenderer(new PatternFrameSource());
         return await renderer.RenderFrameAsync(project, timeSeconds, Width, Height);
@@ -123,16 +192,26 @@ public sealed class NewEffectsRenderTests
         Assert.True(scanline.Red < 200);
     }
 
-    /// <summary>ドロップシャドウ：白い正方形の右下に影が出る。</summary>
+    /// <summary>
+    /// ドロップシャドウ：白い正方形の右下に影が出る。影は黒いため、黒背景の1クリップだけでは
+    /// 見えない（旧テストは (76,56) が明るくなることを期待していたが、黒い影が黒背景に
+    /// 描かれて 0 のままだった）。下に白い映像を置き、上のクリップの緑背景をクロマキーで
+    /// 抜いて透明にすると、影が下の白を暗くするので見える。
+    /// </summary>
     [Fact]
     public async Task DropShadow_CastsShadowDownRight()
     {
-        using var plain = await RenderPlainAsync("pattern-square");
-        using var shadow = await RenderAsync(
-            new ClipEffect { Kind = EffectKind.DropShadow, Amount = 1, Radius = 4 }, "pattern-square");
-        Assert.Equal(SKColors.Black, plain.GetPixel(76, 56));
-        var shadowPixel = shadow.GetPixel(76, 56);
-        Assert.True(shadowPixel.Red > 8);
+        var chromaKey = new ClipEffect { Kind = EffectKind.ChromaKey, Amount = 0.3, Radius = 0.15 };
+        using var plain = await RenderLayeredAsync(new[] { chromaKey });
+        using var shadow = await RenderLayeredAsync(new[]
+        {
+            chromaKey,
+            new ClipEffect { Kind = EffectKind.DropShadow, Amount = 1, Radius = 4 }
+        });
+        Assert.Equal(SKColors.White, plain.GetPixel(74, 54));
+        var shadowPixel = shadow.GetPixel(74, 54);
+        Assert.True(shadowPixel.Red < 200);
+        Assert.True(DiffersAnywhere(plain, shadow));
     }
 
     /// <summary>フィルムグレイン：円の内側の画素値が揺れる。</summary>
@@ -193,5 +272,43 @@ public sealed class NewEffectsRenderTests
         using var plain = await RenderPlainAsync();
         using var curved = await RenderAsync(new ClipEffect { Kind = EffectKind.ToneCurve, Amount = 0, Radius = 0 });
         Assert.False(DiffersAnywhere(plain, curved));
+    }
+
+    /// <summary>トーンカーブ：中間調 +0.2 で中間グレー（128）が約179に持ち上がり、黒点・白点は動かない。</summary>
+    [Fact]
+    public async Task ToneCurve_Midtones_LiftsMidtonesKeepsEndpoints()
+    {
+        using var curved = await RenderAsync(
+            new ClipEffect { Kind = EffectKind.ToneCurve, Amount = 0, Midtones = 0.2, Radius = 0 },
+            "pattern-gradient");
+        Assert.Equal(SKColors.Black, curved.GetPixel(0, 45)); // x=0：中間調の項は 0。
+        Assert.Equal(SKColors.White, curved.GetPixel(159, 45)); // x=1：中間調の項は 0。
+        var mid = curved.GetPixel(80, 45); // 入力 128 → 128/255 + 0.2*4*(128/255)*(127/255) ≒ 0.702 → 179。
+        Assert.InRange(mid.Red, 175, 183);
+        Assert.Equal(mid.Red, mid.Green);
+        Assert.Equal(mid.Red, mid.Blue);
+    }
+
+    /// <summary>トーンカーブ：中間調 -0.2 で中間グレー（128）が約77に沈む。</summary>
+    [Fact]
+    public async Task ToneCurve_Midtones_NegativeLowersMidtones()
+    {
+        using var curved = await RenderAsync(
+            new ClipEffect { Kind = EffectKind.ToneCurve, Amount = 0, Midtones = -0.2, Radius = 0 },
+            "pattern-gradient");
+        var mid = curved.GetPixel(80, 45); // 128/255 - 0.2 ≒ 0.302 → 77。
+        Assert.InRange(mid.Red, 73, 81);
+    }
+
+    /// <summary>トーンカーブ：中間調 0 のとき旧2点版の式と同一（s=0.5, h=-0.3 で中間グレー 128 → 約140）。旧プロジェクトの描画が変わらないことの数値的な固定。</summary>
+    [Fact]
+    public async Task ToneCurve_MidtonesZero_MatchesOldFormula()
+    {
+        using var curved = await RenderAsync(
+            new ClipEffect { Kind = EffectKind.ToneCurve, Amount = 0.5, Midtones = 0, Radius = -0.3 },
+            "pattern-gradient");
+        // y = 128/255 + 0.5*(127/255)^2 - 0.3*(128/255)^2 ≒ 0.550 → 140。
+        var mid = curved.GetPixel(80, 45);
+        Assert.InRange(mid.Red, 136, 144);
     }
 }

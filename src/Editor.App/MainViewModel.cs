@@ -597,7 +597,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         }
     }
 
-    /// <summary>キーフレーム編集で選べるパラメータ（基本5つ＋選択中クリップのエフェクトの Amount / Radius）。</summary>
+    /// <summary>キーフレーム編集で選べるパラメータ（基本5つ＋選択中クリップのエフェクトの Amount / Radius / 第3パラメータ）。</summary>
     public ObservableCollection<KeyframeParameterOption> KeyframeParameterOptions { get; } = new();
 
     /// <summary>選択中クリップのキーフレーム行。</summary>
@@ -1076,7 +1076,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
 
     /// <summary>
     /// キーフレーム編集で選べるパラメータ一覧を作り直す。基本5つに、選択中クリップに
-    /// 付いているエフェクトの Amount / Radius（Radius を使う種類だけ）と、
+    /// 付いているエフェクトの Amount / Radius / 第3パラメータ（使う種類だけ）と、
     /// 可視化クリップのゲイン・線の太さ・表示区間・残像（種類ごと）を足す。
     /// 今選んでいるパラメータが一覧に無くなったら（エフェクトを消した等）、不透明度に戻す。
     /// </summary>
@@ -1148,16 +1148,22 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             return Math.Clamp(value, 0, 1);
         if (VisualizationSettings.TryParseKeyframeParameter(parameterName, out var vizField))
             return VisualizationSettings.ClampKeyframeValue(vizField, value);
-        if (TryParseEffectParameter(parameterName, out var kind, out var isAmount))
-            return isAmount ? ClipEffect.ClampAmount(kind, value) : ClipEffect.ClampRadius(kind, value);
+        if (TryParseEffectParameter(parameterName, out var kind, out var field))
+            return field switch
+            {
+                "Amount" => ClipEffect.ClampAmount(kind, value),
+                "Radius" => ClipEffect.ClampRadius(kind, value),
+                "Midtones" => ClipEffect.ClampMidtones(kind, value),
+                _ => value
+            };
         return value;
     }
 
-    /// <summary>キーフレームのパラメータ名 "Effect:{種類}.Amount/Radius" を分解する。エフェクト用でなければ false。</summary>
-    public static bool TryParseEffectParameter(string parameterName, out EffectKind kind, out bool isAmount)
+    /// <summary>キーフレームのパラメータ名 "Effect:{種類}.Amount/Radius/Midtones" を分解する。エフェクト用でなければ false。field は "Amount" / "Radius" / "Midtones"（中間調はトーンカーブのみ）。</summary>
+    public static bool TryParseEffectParameter(string parameterName, out EffectKind kind, out string field)
     {
         kind = default;
-        isAmount = true;
+        field = string.Empty;
         const string prefix = "Effect:";
         if (!parameterName.StartsWith(prefix, StringComparison.Ordinal))
             return false;
@@ -1167,18 +1173,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             return false;
         if (!Enum.TryParse<EffectKind>(rest[..dot], out kind))
             return false;
-        var field = rest[(dot + 1)..];
-        if (field == "Amount")
-        {
-            isAmount = true;
-            return true;
-        }
-        if (field == "Radius")
-        {
-            isAmount = false;
-            return true;
-        }
-        return false;
+        field = rest[(dot + 1)..];
+        return field is "Amount" or "Radius" or "Midtones";
     }
 
     /// <summary>
@@ -1204,11 +1200,17 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             _ => 0.0
         };
         // エフェクトのパラメータは、その時刻の評価値（キーフレームが無ければ固定値）を使う。
-        if (TryParseEffectParameter(KeyframeParameter, out var effectKind, out var isAmount))
+        if (TryParseEffectParameter(KeyframeParameter, out var effectKind, out var field))
         {
             var effect = clip.Effects.FirstOrDefault(e => e.Kind == effectKind);
             if (effect is not null)
-                defaultValue = isAmount ? effect.Amount : effect.Radius;
+                defaultValue = field switch
+                {
+                    "Amount" => effect.Amount,
+                    "Radius" => effect.Radius,
+                    "Midtones" => effect.Midtones,
+                    _ => defaultValue
+                };
         }
         // 可視化のパラメータも、その時刻の評価値（キーフレームが無ければ固定値）を使う。
         if (VisualizationSettings.TryParseKeyframeParameter(KeyframeParameter, out var vizField))
@@ -1269,6 +1271,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         var clip = SelectedClip;
         if (clip is null || clip.Kind == ClipKind.Audio || clip.Kind == ClipKind.Visualization)
             return;
+        // キー系（背景抜き）はテキストの透明背景には意味が無く、文字色を消すだけなので付けない。
+        if (clip.Kind == ClipKind.Text && !EffectDefinitions.AppliesToText(kind))
+        {
+            StatusMessage = $"「{EffectDisplayName(kind)}」はテキストクリップには使えません（背景を抜くエフェクトのため）。";
+            return;
+        }
         if (clip.Effects.Any(e => e.Kind == kind))
         {
             StatusMessage = "そのエフェクトは既に付いています。";
@@ -1306,7 +1314,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         {
             Kind = kind,
             Amount = definition?.DefaultAmount ?? 0,
-            Radius = definition?.DefaultRadius ?? 0
+            Radius = definition?.DefaultRadius ?? 0,
+            Midtones = definition?.DefaultThird ?? 0
         };
     }
 
@@ -1318,16 +1327,22 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
     public static string EffectAmountLabel(EffectKind kind)
         => EffectDefinitions.Get(kind)?.AmountLabel ?? "量";
 
-    /// <summary>エフェクト量のパラメータ名 "Effect:{種類}.Amount/Radius" の表示名（"エフェクト：グロー（強さ）" など）。エフェクト用でなければ null。キーフレーム欄とバインド欄で共通。</summary>
+    /// <summary>エフェクト量のパラメータ名 "Effect:{種類}.Amount/Radius/Midtones" の表示名（"エフェクト：グロー（強さ）" など）。エフェクト用でなければ null。キーフレーム欄とバインド欄で共通。</summary>
     public static string? EffectParameterLabel(string parameterName)
     {
-        if (!TryParseEffectParameter(parameterName, out var kind, out var isAmount))
+        if (!TryParseEffectParameter(parameterName, out var kind, out var field))
             return null;
-        var label = isAmount ? EffectAmountLabel(kind) : EffectRadiusLabel(kind);
+        var label = field switch
+        {
+            "Amount" => EffectAmountLabel(kind),
+            "Radius" => EffectRadiusLabel(kind),
+            "Midtones" => EffectThirdLabel(kind),
+            _ => string.Empty
+        };
         return $"エフェクト：{EffectDisplayName(kind)}（{label}）";
     }
 
-    /// <summary>選択中クリップに付いているエフェクトの Amount / Radius のパラメータ選択肢（Radius を使う種類だけ副パラメータも）。キーフレーム欄とバインド欄で共通。</summary>
+    /// <summary>選択中クリップに付いているエフェクトの Amount / Radius / 第3パラメータ（トーンカーブの中間調）のパラメータ選択肢（Radius・第3パラメータは使う種類だけ）。キーフレーム欄とバインド欄で共通。</summary>
     private IEnumerable<KeyframeParameterOption> EffectParameterOptions()
     {
         var clip = SelectedClip;
@@ -1335,6 +1350,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             yield break;
         foreach (var effect in clip.Effects)
         {
+            // テキストに意味のないキー系はキーフレームの選択肢にも出さない
+            // （手書きプロジェクトに入っていても描画では無視される）。
+            if (clip.Kind == ClipKind.Text && !EffectDefinitions.AppliesToText(effect.Kind))
+                continue;
             var amountName = ClipEffect.KeyframeParameterName(effect.Kind, isAmount: true);
             yield return new KeyframeParameterOption
             {
@@ -1350,12 +1369,25 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
                     Value = radiusName
                 };
             }
+            if (ClipEffect.UsesThird(effect.Kind))
+            {
+                var thirdName = ClipEffect.KeyframeParameterName(effect.Kind, "Midtones");
+                yield return new KeyframeParameterOption
+                {
+                    Display = EffectParameterLabel(thirdName)!,
+                    Value = thirdName
+                };
+            }
         }
     }
 
     /// <summary>エフェクトの副パラメータ欄の見出し（種類ごと。Radius を使わない種類は空）。見出しは EffectDefinitions の1テーブルが持つ。</summary>
     public static string EffectRadiusLabel(EffectKind kind)
         => EffectDefinitions.Get(kind)?.RadiusLabel ?? string.Empty;
+
+    /// <summary>エフェクトの第3パラメータ欄の見出し（種類ごと。第3パラメータを使わない種類は空。今はトーンカーブの中間調だけ）。見出しは EffectDefinitions の1テーブルが持つ。</summary>
+    public static string EffectThirdLabel(EffectKind kind)
+        => EffectDefinitions.Get(kind)?.ThirdLabel ?? string.Empty;
 
     /// <summary>選択中クリップの音連動バインド行を作り直す（追加した順）。ついでに対象パラメータの一覧も作り直す。</summary>
     public void RefreshAudioBindingRows()
@@ -1369,12 +1401,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             AudioBindingRows.Add(new AudioBindingRow(this, binding));
     }
 
-    /// <summary>バインドの対象に選べるパラメータ（基本5つ＋選択中クリップのエフェクトの Amount / Radius）。</summary>
+    /// <summary>バインドの対象に選べるパラメータ（基本5つ＋選択中クリップのエフェクトの Amount / Radius / 第3パラメータ）。</summary>
     public ObservableCollection<KeyframeParameterOption> AudioBindingParameterOptions { get; } = new();
 
     /// <summary>
     /// バインドの対象パラメータ一覧を作り直す。基本5つに、選択中クリップに
-    /// 付いているエフェクトの Amount / Radius（Radius を使う種類だけ）を足す。
+    /// 付いているエフェクトの Amount / Radius / 第3パラメータ（使う種類だけ）を足す。
     /// 今選んでいる追加対象が一覧に無くなったら（エフェクトを消した等）、拡大率に戻す。
     /// </summary>
     private void RefreshAudioBindingParameterOptions()
@@ -1492,16 +1524,18 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
     /// </summary>
     private static (AudioBindCombine Combine, double Min, double Max) DefaultBindingRange(string parameter, Clip? clip)
     {
-        if (clip is not null && TryParseEffectParameter(parameter, out var kind, out var isAmount))
+        if (clip is not null && TryParseEffectParameter(parameter, out var kind, out var field))
         {
             var effect = clip.Effects.FirstOrDefault(e => e.Kind == kind);
             var definition = EffectDefinitions.Get(kind);
             if (effect is not null && definition is not null)
             {
-                if (isAmount)
+                if (field == "Amount")
                     return (AudioBindCombine.Add, effect.Amount, definition.AmountMax);
-                if (definition.RadiusMax is { } radiusMax)
+                if (field == "Radius" && definition.RadiusMax is { } radiusMax)
                     return (AudioBindCombine.Add, effect.Radius, radiusMax);
+                if (field == "Midtones" && definition.ThirdMax is { } thirdMax)
+                    return (AudioBindCombine.Add, effect.Midtones, thirdMax);
             }
         }
         return parameter switch

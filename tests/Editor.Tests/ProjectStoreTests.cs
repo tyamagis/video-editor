@@ -23,6 +23,52 @@ public sealed class ProjectStoreTests
         return project;
     }
 
+    /// <summary>トーンカーブの中間調（Midtones）が保存・再読込で残ること。</summary>
+    [Fact]
+    public void Serialize_RoundTrip_RestoresToneCurveMidtones()
+    {
+        var project = SampleProject(version: 1);
+        project.Tracks[0].Clips[0].Effects.Add(new ClipEffect
+        {
+            Kind = EffectKind.ToneCurve,
+            Amount = 0.3,
+            Midtones = 0.4,
+            Radius = -0.2
+        });
+
+        var restored = ProjectStore.Deserialize(ProjectStore.Serialize(project));
+        var effect = restored.Tracks[0].Clips[0].Effects[0];
+
+        Assert.Equal(EffectKind.ToneCurve, effect.Kind);
+        Assert.Equal(0.3, effect.Amount, 9);
+        Assert.Equal(0.4, effect.Midtones, 9);
+        Assert.Equal(-0.2, effect.Radius, 9);
+    }
+
+    /// <summary>旧プロジェクト（Midtones の項目が無い JSON）は中間調 0 として読めること（旧2点版と同一の描画になる）。</summary>
+    [Fact]
+    public void Deserialize_OldProjectWithoutMidtones_LoadsAsZero()
+    {
+        var project = SampleProject(version: 1);
+        project.Tracks[0].Clips[0].Effects.Add(new ClipEffect
+        {
+            Kind = EffectKind.ToneCurve,
+            Amount = 0.3,
+            Radius = -0.2
+        });
+        var json = ProjectStore.Serialize(project);
+        // 旧版で保存された形（Midtones の行が無い JSON）を再現する。
+        var oldJson = json.Replace("\"Midtones\": 0,", string.Empty);
+        Assert.DoesNotContain("Midtones", oldJson); // 置換が効いていること（効かなければこのテストは無意味）。
+
+        var restored = ProjectStore.Deserialize(oldJson);
+        var effect = restored.Tracks[0].Clips[0].Effects[0];
+
+        Assert.Equal(0, effect.Midtones);
+        Assert.Equal(0.3, effect.Amount, 9);
+        Assert.Equal(-0.2, effect.Radius, 9);
+    }
+
     [Fact]
     public void Serialize_DoesNotModifyProjectVersion()
     {

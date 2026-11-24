@@ -47,6 +47,8 @@ public sealed class EffectRow : INotifyPropertyChanged
             OnPropertyChanged(nameof(AmountLabel));
             OnPropertyChanged(nameof(RadiusLabel));
             OnPropertyChanged(nameof(ShowRadius));
+            OnPropertyChanged(nameof(MidtonesLabel));
+            OnPropertyChanged(nameof(ShowMidtones));
             OnPropertyChanged(nameof(ShowKeyColor));
             _owner.RefreshKeyframeRows();
             _owner.RefreshAudioBindingRows(); // 種類が変わるとバインドの対象に選べるエフェクト量も変わる。
@@ -84,6 +86,21 @@ public sealed class EffectRow : INotifyPropertyChanged
         }
     }
 
+    /// <summary>第3パラメータ。トーンカーブの中間調（-1〜1。+で中間を持ち上げ、-で沈める）。他の種類では使わない。</summary>
+    public double Midtones
+    {
+        get => Effect.Midtones;
+        set
+        {
+            var clamped = ClipEffect.ClampMidtones(Effect.Kind, value);
+            if (Math.Abs(Effect.Midtones - clamped) < 1e-9)
+                return;
+            Effect.Midtones = clamped;
+            OnPropertyChanged();
+            _owner.NotifyTimelineChanged();
+        }
+    }
+
     /// <summary>クロマキーのキー色（"#00FF00" など）。離散的な変更なので代入前にスナップショットを取る。</summary>
     public string KeyColorHex
     {
@@ -107,6 +124,12 @@ public sealed class EffectRow : INotifyPropertyChanged
 
     /// <summary>副パラメータ欄を表示するか（Radius を使う種類だけ）。</summary>
     public bool ShowRadius => ClipEffect.UsesRadius(Effect.Kind);
+
+    /// <summary>第3パラメータ欄の見出し（種類ごと。今はトーンカーブの中間調だけ）。</summary>
+    public string MidtonesLabel => MainViewModel.EffectThirdLabel(Effect.Kind);
+
+    /// <summary>第3パラメータ欄を表示するか（第3パラメータを使う種類だけ）。</summary>
+    public bool ShowMidtones => ClipEffect.UsesThird(Effect.Kind);
 
     /// <summary>キー色欄を表示するか（クロマキーだけ使う）。</summary>
     public bool ShowKeyColor => Effect.Kind == EffectKind.ChromaKey;

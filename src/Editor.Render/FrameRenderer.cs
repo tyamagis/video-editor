@@ -1,7 +1,9 @@
 // フレーム描画（設計プラン 5章）。
 // 時刻 t のフレームを SkiaSharp で描く関数を1つだけ作る。
 // プレビューと書き出しは同じ描画コードを使うため、表示の一致が保たれる。
-// 映像フレームは Editor.Media から取得し、テキストは直接描く。
+// 映像フレームは Editor.Media から取得する。テキストはエフェクト無しなら直接描き、
+// エフェクト付きならフルフレームの透明オフスクリーンに描いてから
+// 映像クリップと同じエフェクト適用経路（DrawBitmapWithTransform）に通す。
 
 using System.IO;
 using System.Runtime.InteropServices;
@@ -241,7 +243,10 @@ public sealed class TimelineFrameRenderer : IFrameRenderer
 
             var kaleidoscope = effects.FirstOrDefault(e => e.Kind == EffectKind.Kaleidoscope);
             if (kaleidoscope is not null)
-                work = TrackIntermediate(work, ApplyKaleidoscope(work, kaleidoscope), intermediates);
+                // テキストは透明背景のオフスクリーンから来るため、万華鏡の背景も透明にする
+                // （黒で塗るとテキストの周りが黒い四角で塗りつぶされて下のトラックが見えなくなる）。
+                // 映像・静止画は従来どおり黒のまま（ズーム<1 で端に残る黒は従来の見た目を保つ）。
+                work = TrackIntermediate(work, ApplyKaleidoscope(work, kaleidoscope, state.Clip.Kind == ClipKind.Text), intermediates);
 
             // 魚眼・色収差：どちらも中心からの放射状の処理なので1回の画素ループに統合する。
             var fisheye = effects.FirstOrDefault(e => e.Kind == EffectKind.Fisheye);
@@ -437,14 +442,18 @@ public sealed class TimelineFrameRenderer : IFrameRenderer
     /// <summary>
     /// 万華鏡：画像を扇形に切り、隣り合う扇形を鏡像にして円状に並べる。
     /// 扇形の枚数だけ画像全体を描き直すため、分割数が多いほど重い（最大12枚）。
+    /// transparentBackground が true（テキスト用）なら背景を透明で塗る。扇形の和集合は
+    /// 画像全体を覆う円になるため、ズーム=1 では背景色はどこにも見えない。
+    /// ズーム&lt;1 では扇形の外側に背景色が残る：映像では従来の黒、テキストでは透明
+    /// （下のトラックが見える）が正しい。
     /// </summary>
-    private static SKBitmap ApplyKaleidoscope(SKBitmap src, ClipEffect effect)
+    private static SKBitmap ApplyKaleidoscope(SKBitmap src, ClipEffect effect, bool transparentBackground = false)
     {
         var segments = (int)Math.Clamp(Math.Round(effect.Radius), 3, 12);
         var zoom = (float)Math.Clamp(effect.Amount, 0.25, 2);
         var dst = new SKBitmap(src.Width, src.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
         using var canvas = new SKCanvas(dst);
-        canvas.Clear(SKColors.Black);
+        canvas.Clear(transparentBackground ? SKColors.Transparent : SKColors.Black);
 
         var cx = src.Width / 2f;
         var cy = src.Height / 2f;
@@ -742,11 +751,15 @@ public sealed class TimelineFrameRenderer : IFrameRenderer
         return result;
     }
 
-    /// <summary>色反転のマトリクス（量 t：0 で元の色、1 で完全反転）。</summary>
+    /// <summary>
+    /// 色反転のマトリクス（量 t：0 で元の色、1 で完全反転）。
+    /// Skia のカラーマトリクスは 0〜1 の浮動小数で扱うため、オフセットも 0〜1
+    /// スケールにする（255 だとクランプで全白になる。旧版のバグ）。
+    /// </summary>
     private static float[] InvertMatrix(double t)
     {
         var f = (float)(1 - 2 * t);
-        var offset = (float)(255 * t);
+        var offset = (float)t;
         return new float[]
         {
             f, 0, 0, 0, offset,
@@ -828,7 +841,7 @@ public sealed class TimelineFrameRenderer : IFrameRenderer
     /// ポスタリゼーション：チャンネルごとに階調数へ量子化する。
     /// ノイズ：粒ごとに決まるハッシュ値で輝度を揺らす（時刻で変わる）。
     /// フィルムグレイン：ノイズより弱い振幅の粒状感（ノイズとは別の種でずらすため、両方付けても粒が重ならない）。
-    /// トーンカーブ：シャドウ／ハイライトの簡易2点調整（LUT。中間調は両者の中間から自動補間）。
+    /// トーンカーブ：シャドウ／中間調／ハイライトの3点調整（LUT。中間調は黒点・白点を動かさない山形の項）。
     /// ビネット：中心からの距離で周囲を暗くする。
     /// RGB はアルファを超えないよう丸める（Premul を壊さないため）。
     /// </summary>
@@ -849,7 +862,7 @@ public sealed class TimelineFrameRenderer : IFrameRenderer
         var filmGrainAmount = filmGrain?.Amount ?? 0;
         var filmGrainSize = filmGrain is not null ? (int)Math.Clamp(Math.Round(filmGrain.Radius), 1, 8) : 1;
         var toneTable = toneCurve is not null
-            ? BuildToneCurveTable(toneCurve.Amount, toneCurve.Radius) : null;
+            ? BuildToneCurveTable(toneCurve.Amount, toneCurve.Midtones, toneCurve.Radius) : null;
         var vignetteAmount = vignette?.Amount ?? 0;
         var vignetteRadius = vignette is not null ? Math.Clamp(vignette.Radius, 0.5, 2) : 1;
 
@@ -942,21 +955,27 @@ public sealed class TimelineFrameRenderer : IFrameRenderer
     }
 
     /// <summary>
-    /// 簡易トーンカーブの LUT（256段）。シャドウ s・ハイライト h は -1〜1。
-    /// y = x + s(1-x)^2 + h x^2：暗部・明部を持ち上げ／締め、中間調は両者の中間から自動補間される。
-    /// 両方 0 なら null（変化なし）。
+    /// トーンカーブの LUT（256段）。シャドウ s・中間調 m・ハイライト h は -1〜1。
+    /// y = x + s(1-x)^2 + m·4x(1-x) + h x^2。
+    /// 中間調の項 4x(1-x) は x=0.5 で 1（最大）、両端で 0 のため、黒点・白点は動かさず
+    /// 中間だけを持ち上げ／沈める。m = 0 のとき式は旧2点版 y = x + s(1-x)^2 + h x^2 と
+    /// 完全に一致するため、旧プロジェクト（Midtones なし＝0）の描画結果は変わらない。
+    /// 3つとも 0 なら null（変化なし）。
+    /// なお旧版と同じく、3点が極端に逆向き（例：s=1, h=-1）のとき曲線は単調でなくなり
+    /// 階調が反転し得る。範囲は 0〜255 に丸めるので値は暴走しない。
     /// </summary>
-    private static byte[]? BuildToneCurveTable(double shadows, double highlights)
+    private static byte[]? BuildToneCurveTable(double shadows, double midtones, double highlights)
     {
-        if (Math.Abs(shadows) < 1e-6 && Math.Abs(highlights) < 1e-6)
+        if (Math.Abs(shadows) < 1e-6 && Math.Abs(midtones) < 1e-6 && Math.Abs(highlights) < 1e-6)
             return null;
         var s = Math.Clamp(shadows, -1, 1);
+        var m = Math.Clamp(midtones, -1, 1);
         var h = Math.Clamp(highlights, -1, 1);
         var table = new byte[256];
         for (var i = 0; i < 256; i++)
         {
             var x = i / 255.0;
-            var y = x + s * (1 - x) * (1 - x) + h * x * x;
+            var y = x + s * (1 - x) * (1 - x) + m * 4 * x * (1 - x) + h * x * x;
             table[i] = (byte)Math.Clamp(Math.Round(y * 255), 0, 255);
         }
         return table;
@@ -1219,14 +1238,115 @@ public sealed class TimelineFrameRenderer : IFrameRenderer
     }
 
 
-    private static void DrawTextClip(
+    /// <summary>
+    /// テキストクリップを描く。エフェクト無し（かつ色調補正も既定値）なら従来どおり
+    /// 直接描く。エフェクトが付いていれば、テキストをフルフレームの透明オフスクリーンに
+    /// 最終サイズで描いてから、映像クリップと同じ DrawBitmapWithTransform に通す。
+    /// フルフレームにするのは、ビネットなどフレーム相対のエフェクトの意味と fit 倍率
+    /// （=1）を映像クリップと揃えるため。位置・回転・不透明度・色調補正はパイプライン側が
+    /// 付けるので、オフスクリーンでは中心に回転無し・不透明で描く（ブラーもパイプライン側）。
+    /// プレビューと書き出しは同じ RenderFrameAsync を通るため、両方に同じく反映される。
+    /// キーフレーム・音連動バインドは Evaluator が state.Effects に評価済みで入れてある
+    /// ため、ここでは何もしない（映像クリップと同じ）。
+    /// </summary>
+    private void DrawTextClip(
         SKCanvas canvas, Clip clip, EvaluatedClipState state, int width, int height)
     {
         if (string.IsNullOrEmpty(clip.Text))
             return;
 
-        // テキストにはブレンドモードとブラーだけ適用する（グロー・RGBシフト・
-        // スライス・ワープ・クロマキーは画像クリップ専用）。
+        // エフェクト無し（かつ色調補正も既定値）なら直接描画する。オフスクリーン経由では
+        // Premul の丸めが ±1 入るため、エフェクト無しの描画結果を従来とビット単位で
+        // 同じに保つには直接描画が要る。
+        if (!HasActiveTextEffect(state.Effects)
+            && Math.Abs(state.Brightness) < 1e-6 && Math.Abs(state.Contrast - 1.0) < 1e-6)
+        {
+            DrawTextDirect(canvas, clip, state, width, height);
+            return;
+        }
+
+        using var offscreen = new SKBitmap(new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul));
+        using (var offCanvas = new SKCanvas(offscreen))
+        {
+            offCanvas.Clear(SKColors.Transparent);
+            DrawTextGlyphs(offCanvas, clip, state, width, height);
+        }
+
+        // パイプラインに渡す状態：Scale はオフスクリーン描画時に既に掛けたので 1 にする
+        // （二重に掛けると文字が Scale^2 倍になる）。それ以外はそのまま。
+        // テキストに意味のないキー系エフェクトはここで外す（UIで付けられないが、
+        // 手書きのプロジェクトに入っていても無視される。文字色を消すだけのため）。
+        var pipelineState = new EvaluatedClipState
+        {
+            Clip = state.Clip,
+            TimeSeconds = state.TimeSeconds,
+            Opacity = state.Opacity,
+            Scale = 1.0,
+            RotationDegrees = state.RotationDegrees,
+            PositionX = state.PositionX,
+            PositionY = state.PositionY,
+            Brightness = state.Brightness,
+            Contrast = state.Contrast,
+            BlendMode = state.BlendMode,
+            Effects = state.Effects.Where(e => EffectDefinitions.AppliesToText(e.Kind)).ToList(),
+            Visualization = state.Visualization
+        };
+        DrawBitmapWithTransform(canvas, offscreen, pipelineState, width, height);
+    }
+
+    /// <summary>
+    /// テキストに付いたエフェクトのうち、描画に実際に変化を与えるものがあるか。
+    /// 判定は DrawBitmapWithTransform 側のガード（量 0 なら何もしない等）と揃えてある。
+    /// キー系はテキストでは無効なので数えない。
+    /// </summary>
+    private static bool HasActiveTextEffect(IReadOnlyList<ClipEffect> effects)
+    {
+        foreach (var effect in effects)
+        {
+            if (!EffectDefinitions.AppliesToText(effect.Kind))
+                continue;
+            if (TextEffectIsActive(effect))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>そのエフェクトが量 0 などで実質無効か。DrawBitmapWithTransform 内の各ガードと対応する。</summary>
+    private static bool TextEffectIsActive(ClipEffect effect) => effect.Kind switch
+    {
+        EffectKind.Blur => effect.Amount > 0,
+        EffectKind.Glow => effect.Amount > 0,
+        EffectKind.RgbShift => effect.Amount > 0,
+        EffectKind.Slice => effect.Amount > 0,
+        EffectKind.Warp => effect.Amount > 0,
+        EffectKind.Mosaic => effect.Amount >= 2,
+        EffectKind.Vignette => effect.Amount > 0,
+        EffectKind.Echo => effect.Amount > 0,
+        EffectKind.Invert => effect.Amount > 0,
+        EffectKind.HueShift => Math.Abs(effect.Amount) > 1e-6,
+        EffectKind.Saturation => Math.Abs(effect.Amount - 1) > 1e-6,
+        EffectKind.Monochrome => effect.Amount > 0,
+        EffectKind.Sepia => effect.Amount > 0,
+        EffectKind.Posterize => true,
+        EffectKind.Noise => effect.Amount > 0,
+        EffectKind.ChromaticAberration => effect.Amount > 0,
+        EffectKind.Fisheye => effect.Amount > 0,
+        EffectKind.VhsGlitch => effect.Amount > 0,
+        EffectKind.DropShadow => effect.Amount > 0,
+        EffectKind.FilmGrain => effect.Amount > 0,
+        EffectKind.ZoomBlur => effect.Amount > 0,
+        EffectKind.MotionBlur => effect.Amount > 0,
+        EffectKind.ToneCurve => Math.Abs(effect.Amount) > 1e-6
+            || Math.Abs(effect.Midtones) > 1e-6 || Math.Abs(effect.Radius) > 1e-6,
+        EffectKind.Kaleidoscope => true,
+        // ChromaKey / LuminanceKey は HasActiveTextEffect で弾かれる。ここに来たら無効扱い。
+        _ => false
+    };
+
+    /// <summary>従来のテキスト直接描画（ブレンドモードとブラーだけ）。エフェクト無しの経路で、見た目を従来と変えないためのもの。</summary>
+    private static void DrawTextDirect(
+        SKCanvas canvas, Clip clip, EvaluatedClipState state, int width, int height)
+    {
         var blur = state.Effects
             .Where(e => e.Kind == EffectKind.Blur)
             .Select(e => e.Amount)
@@ -1253,14 +1373,44 @@ public sealed class TimelineFrameRenderer : IFrameRenderer
         canvas.Restore();
     }
 
-    /// <summary>明るさ・コントラストのカラーマトリクス。フェーズ1の色調補正の土台。channel を指定するとそのチャンネルだけ残す（RGBシフト用）。</summary>
+    /// <summary>
+    /// オフスクリーン（フルフレーム・透明背景）へ文字だけを描く。中心に回転無し・不透明で、
+    /// 最終サイズ（FontSize × Scale）で描く。位置・回転・不透明度・ブレンド・ブラーは
+    /// パイプライン側（DrawBitmapWithTransform）が付けるため、ここでは付けない。
+    /// ベースライン位置（中心 + TextSize*0.35）は従来の直接描画と同じ。
+    /// </summary>
+    private static void DrawTextGlyphs(
+        SKCanvas canvas, Clip clip, EvaluatedClipState state, int width, int height)
+    {
+        using var typeface = SKTypeface.FromFamilyName(clip.FontFamily);
+        using var paint = new SKPaint
+        {
+            Typeface = typeface,
+            TextSize = (float)(clip.FontSize * state.Scale),
+            Color = ParseColor(clip.FontColorHex, 1.0),
+            IsAntialias = true
+        };
+
+        var textWidth = paint.MeasureText(clip.Text);
+        canvas.DrawText(clip.Text,
+            (float)(width / 2.0 - textWidth / 2),
+            (float)(height / 2.0 + paint.TextSize * 0.35f),
+            paint);
+    }
+
+    /// <summary>
+    /// 明るさ・コントラストのカラーマトリクス。フェーズ1の色調補正の土台。channel を指定するとそのチャンネルだけ残す（RGBシフト用）。
+    /// Skia のカラーマトリクスは 0〜1 の浮動小数で扱うため、オフセットも 0〜1
+    /// スケールにする（byte スケールの 128 / 255 だとクランプで全白になる。旧版のバグ）。
+    /// 式の意味は旧版と同じ：out = contrast * in + (1 - contrast) * 128/255 + brightness。
+    /// </summary>
     internal static SKColorFilter? ColorCorrectionFilter(double brightness, double contrast, Channel? channel = null)
     {
         if (channel is null && Math.Abs(brightness) < 1e-6 && Math.Abs(contrast - 1.0) < 1e-6)
             return null;
 
         var c = (float)contrast;
-        var offset = (float)(128 * (1 - contrast) + brightness * 255);
+        var offset = (float)((1 - contrast) * 128 / 255.0 + brightness);
         // 行ごとに [R係数, G係数, B係数, A係数, オフセット]。残さないチャンネルの行は 0 にする。
         var rRow = channel is null or Channel.Red ? (c, offset) : (0f, 0f);
         var gRow = channel is null or Channel.Green ? (c, offset) : (0f, 0f);

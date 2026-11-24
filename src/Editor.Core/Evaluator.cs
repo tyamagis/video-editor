@@ -94,8 +94,8 @@ public static class TimelineEvaluator
     }
 
     /// <summary>
-    /// エフェクトの Amount / Radius を時刻 t（タイムライン秒）で評価する。
-    /// まずキーフレームトラック "Effect:{種類}.Amount" / "Effect:{種類}.Radius" で基本値を求め、
+    /// エフェクトの Amount / Radius / 第3パラメータ（トーンカーブの中間調）を時刻 t（タイムライン秒）で評価する。
+    /// まずキーフレームトラック "Effect:{種類}.Amount" / "Effect:{種類}.Radius" / "Effect:{種類}.Midtones" で基本値を求め、
     /// そのパラメータの有効なバインドがあれば帯域エネルギーで動かす（基本パラメータと
     /// 同じ合成順序：キーフレーム → バインド → 種類の範囲に丸める）。
     /// キーフレームもバインドも無ければ固定値のままなので、旧プロジェクトはそのまま動く。
@@ -117,7 +117,15 @@ public static class TimelineEvaluator
             var radiusParameter = ClipEffect.KeyframeParameterName(effect.Kind, isAmount: false);
             var radius = clip.EvaluateParameter(radiusParameter, local, effect.Radius);
             radius = ApplyAudioBindings(project, clip, radiusParameter, timeSeconds, radius, audio);
-            if (Math.Abs(amount - effect.Amount) < 1e-9 && Math.Abs(radius - effect.Radius) < 1e-9)
+            var midtones = effect.Midtones;
+            if (ClipEffect.UsesThird(effect.Kind))
+            {
+                var midtonesParameter = ClipEffect.KeyframeParameterName(effect.Kind, "Midtones");
+                midtones = clip.EvaluateParameter(midtonesParameter, local, effect.Midtones);
+                midtones = ApplyAudioBindings(project, clip, midtonesParameter, timeSeconds, midtones, audio);
+            }
+            if (Math.Abs(amount - effect.Amount) < 1e-9 && Math.Abs(radius - effect.Radius) < 1e-9
+                && Math.Abs(midtones - effect.Midtones) < 1e-9)
             {
                 result.Add(effect);
                 continue;
@@ -126,6 +134,7 @@ public static class TimelineEvaluator
             var copy = effect.Clone();
             copy.Amount = ClipEffect.ClampAmount(effect.Kind, amount);
             copy.Radius = ClipEffect.ClampRadius(effect.Kind, radius);
+            copy.Midtones = ClipEffect.ClampMidtones(effect.Kind, midtones);
             result.Add(copy);
         }
         return result;
@@ -149,7 +158,7 @@ public static class TimelineEvaluator
     /// <summary>
     /// 指定パラメータの有効なバインドをすべて適用する（キーフレーム値 → バインド合成値）。
     /// バインドの対象は基本パラメータ（"Opacity" など）とエフェクト量
-    /// （"Effect:{種類}.Amount" / "Effect:{種類}.Radius"）のどちらでもよい。
+    /// （"Effect:{種類}.Amount" / "Effect:{種類}.Radius" / "Effect:{種類}.Midtones"）のどれでもよい。
     /// 音源クリップが見つからない・解析されていない・その時刻に流れていないバインドは無視する。
     /// </summary>
     private static double ApplyAudioBindings(

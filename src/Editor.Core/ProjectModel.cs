@@ -164,9 +164,10 @@ public enum EffectKind
 
 /// <summary>
 /// クリップに付けるエフェクト1つ。
-/// Amount / Radius はキーフレーム化できる（クリップの KeyframeTracks に
-/// パラメータ名 "Effect:{種類}.Amount" / "Effect:{種類}.Radius" のトラックを置く。
+/// Amount / Radius / Midtones はキーフレーム化できる（クリップの KeyframeTracks に
+/// パラメータ名 "Effect:{種類}.Amount" / "Effect:{種類}.Radius" / "Effect:{種類}.Midtones" のトラックを置く。
 /// トラックが無ければこの固定値が使われるため、旧プロジェクトはそのまま動く）。
+/// Midtones はトーンカーブ専用（他の種類では使わない）。
 /// パラメータの意味は種類ごとに決まる。
 /// <list type="bullet">
 /// <item>Blur：Amount = ぼかし半径（px、0〜100）。Radius・KeyColorHex は使わない。</item>
@@ -194,7 +195,7 @@ public enum EffectKind
 /// <item>ZoomBlur：Amount = 中心から放射状にぼかす強さ（0〜1。0 でぼかしなし）、Radius = サンプル数（4〜16。多いほど滑らかだが重い）。</item>
 /// <item>MotionBlur：Amount = 残像方向のぼかしの長さ（px、0〜64。0 でぼかしなし）、Radius = ぼかす方向（度、0〜360。0 で右向き・水平）。</item>
 /// <item>LuminanceKey：Amount = 明るさのしきい値（0〜1。しきい値より明るい画素を抜く。白背景の除去など。クロマキーの明暗版）、Radius = なめらかさ（0〜1。しきい値と完全不透明の間の遷移幅）。</item>
-/// <item>ToneCurve：簡易版トーンカーブ（中間調はシャドウ・ハイライトから自動補間）。Amount = シャドウ（-1〜1。+で暗部を持ち上げ、-で締める）、Radius = ハイライト（-1〜1。+で明部を持ち上げ、-で抑える）。両方 0 で変化なし。</item>
+/// <item>ToneCurve：トーンカーブ（シャドウ・中間調・ハイライトの3点を独立調整）。Amount = シャドウ（-1〜1。+で暗部を持ち上げ、-で締める）、Midtones = 中間調（-1〜1。+で中間を持ち上げ、-で沈める。黒点・白点は動かない）、Radius = ハイライト（-1〜1。+で明部を持ち上げ、-で抑える）。3つとも 0 で変化なし。旧プロジェクト（Midtones が保存されていない・中間調のトラックが無いもの）は Midtones = 0 として読み込み、Midtones = 0 のときの描画式は旧2点版と同一のため、旧プロジェクトの見た目は変わらない。</item>
 /// </list>
 /// </summary>
 public sealed class ClipEffect
@@ -202,13 +203,25 @@ public sealed class ClipEffect
     public EffectKind Kind { get; set; }
     public double Amount { get; set; }
     public double Radius { get; set; }
+
+    /// <summary>
+    /// トーンカーブの中間調（-1〜1。0 が変化なし）。他の種類では使わない。
+    /// 旧プロジェクトの JSON にはこの項目が無いが、読み込み時に 0 になる
+    /// （System.Text.Json は欠けた項目を既定値で補う）ため、そのまま開ける。
+    /// </summary>
+    public double Midtones { get; set; }
+
     public string KeyColorHex { get; set; } = "#00FF00";
 
     public ClipEffect Clone() => (ClipEffect)MemberwiseClone();
 
     /// <summary>エフェクトの Amount / Radius に対応するキーフレームのパラメータ名（"Effect:{種類}.Amount" など）。</summary>
     public static string KeyframeParameterName(EffectKind kind, bool isAmount)
-        => $"Effect:{kind}.{(isAmount ? "Amount" : "Radius")}";
+        => KeyframeParameterName(kind, isAmount ? "Amount" : "Radius");
+
+    /// <summary>エフェクトのパラメータに対応するキーフレームのパラメータ名（"Effect:{種類}.{項目}"。項目は "Amount" / "Radius" / "Midtones"）。</summary>
+    public static string KeyframeParameterName(EffectKind kind, string field)
+        => $"Effect:{kind}.{field}";
 
     /// <summary>種類ごとの Amount の範囲に丸める（描画・評価側の最終防衛。UI側でも同じ範囲で丸める）。範囲は EffectDefinitions の1テーブルが持つ。</summary>
     public static double ClampAmount(EffectKind kind, double value)
@@ -226,9 +239,22 @@ public sealed class ClipEffect
             : Math.Clamp(value, definition.RadiusMin.Value, definition.RadiusMax!.Value);
     }
 
+    /// <summary>種類ごとの第3パラメータ（トーンカーブの中間調）の範囲に丸める（第3パラメータを使わない種類はそのまま返す）。範囲は EffectDefinitions の1テーブルが持つ。</summary>
+    public static double ClampMidtones(EffectKind kind, double value)
+    {
+        var definition = EffectDefinitions.Get(kind);
+        return definition?.ThirdMin is null
+            ? value
+            : Math.Clamp(value, definition.ThirdMin.Value, definition.ThirdMax!.Value);
+    }
+
     /// <summary>Radius を使う種類か（インスペクタの副パラメータ欄の表示に使う）。判定は EffectDefinitions の1テーブルが持つ。</summary>
     public static bool UsesRadius(EffectKind kind)
         => EffectDefinitions.Get(kind)?.UsesRadius ?? false;
+
+    /// <summary>第3パラメータ（トーンカーブの中間調）を使う種類か（インスペクタの中間調欄・キーフレーム選択肢の表示に使う）。判定は EffectDefinitions の1テーブルが持つ。</summary>
+    public static bool UsesThird(EffectKind kind)
+        => EffectDefinitions.Get(kind)?.UsesThird ?? false;
 }
 
 /// <summary>バインドの合成方法（キーフレーム値と音連動値の合成）。</summary>
@@ -249,7 +275,7 @@ public enum AudioBindCombine
 /// </summary>
 public sealed class AudioBinding
 {
-    /// <summary>動かすパラメータ。"Opacity" / "Scale" / "Rotation" / "PositionX" / "PositionY"、またはエフェクト量 "Effect:{種類}.Amount" / "Effect:{種類}.Radius"（ClipEffect.KeyframeParameterName と同じ名前。エフェクトが付いていない種類へのバインドは無視される）。</summary>
+    /// <summary>動かすパラメータ。"Opacity" / "Scale" / "Rotation" / "PositionX" / "PositionY"、またはエフェクト量 "Effect:{種類}.Amount" / "Effect:{種類}.Radius" / "Effect:{種類}.Midtones"（ClipEffect.KeyframeParameterName と同じ名前。エフェクトが付いていない種類へのバインドは無視される）。</summary>
     public string ParameterName { get; set; } = "Scale";
 
     /// <summary>音源にするクリップの Id（プロジェクト内の音声つきクリップ）。</summary>
@@ -338,7 +364,7 @@ public sealed class Keyframe
 /// <summary>
 /// 1つのパラメータに対するキーフレーム列。
 /// パラメータ名は "Opacity" / "Scale" / "Rotation" / "PositionX" / "PositionY"、
-/// またはエフェクト用 "Effect:{EffectKind}.Amount" / "Effect:{EffectKind}.Radius"。
+/// またはエフェクト用 "Effect:{EffectKind}.Amount" / "Effect:{EffectKind}.Radius" / "Effect:{EffectKind}.Midtones"（中間調はトーンカーブのみ）。
 /// 不変条件：キーフレームは常に時刻の昇順に保つ。追加は AddKeyframe（挿入位置を維持）、
 /// 削除は RemoveKeyframe、時刻の直接書き換えの後は SortKeyframes を呼ぶ。
 /// 代入（JSON読み込み・分割処理など）の際は並べ替えで正規化する。
@@ -471,7 +497,7 @@ public sealed class Clip
     /// <summary>ブレンドモード（上のトラックのクリップが下とどう合成されるか）。既定は通常。</summary>
     public BlendMode BlendMode { get; set; } = BlendMode.Normal;
 
-    /// <summary>クリップに付けるエフェクトの一覧。Amount / Radius はキーフレーム化できる（パラメータ名は ClipEffect.KeyframeParameterName を参照）。</summary>
+    /// <summary>クリップに付けるエフェクトの一覧。Amount / Radius / Midtones（トーンカーブのみ）はキーフレーム化できる（パラメータ名は ClipEffect.KeyframeParameterName を参照）。</summary>
     public List<ClipEffect> Effects { get; set; } = new();
 
     /// <summary>周波数帯駆動バインドの一覧。音声クリップの帯域エネルギーで数値パラメータを動かす（フェーズ2）。</summary>
