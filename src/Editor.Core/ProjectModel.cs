@@ -159,7 +159,28 @@ public enum EffectKind
     ZoomBlur,
     MotionBlur,
     LuminanceKey,
-    ToneCurve
+    ToneCurve,
+    Bloom,
+    LightLeak,
+    PixelSort,
+    Wave,
+    Mirror,
+    Twirl,
+    Displacement,
+    Bulge,
+    WaterRipple,
+    ColorTemp,
+    Levels,
+    SplitTone,
+    GradientMap,
+    OldFilm,
+    Letterbox,
+    Scanlines,
+    Halftone,
+    EdgeDetect,
+    Solarize,
+    Kuwahara,
+    TiltShift
 }
 
 /// <summary>
@@ -196,6 +217,27 @@ public enum EffectKind
 /// <item>MotionBlur：Amount = 残像方向のぼかしの長さ（px、0〜64。0 でぼかしなし）、Radius = ぼかす方向（度、0〜360。0 で右向き・水平）。</item>
 /// <item>LuminanceKey：Amount = 明るさのしきい値（0〜1。しきい値より明るい画素を抜く。白背景の除去など。クロマキーの明暗版）、Radius = なめらかさ（0〜1。しきい値と完全不透明の間の遷移幅）。</item>
 /// <item>ToneCurve：トーンカーブ（シャドウ・中間調・ハイライトの3点を独立調整）。Amount = シャドウ（-1〜1。+で暗部を持ち上げ、-で締める）、Midtones = 中間調（-1〜1。+で中間を持ち上げ、-で沈める。黒点・白点は動かない）、Radius = ハイライト（-1〜1。+で明部を持ち上げ、-で抑える）。3つとも 0 で変化なし。旧プロジェクト（Midtones が保存されていない・中間調のトラックが無いもの）は Midtones = 0 として読み込み、Midtones = 0 のときの描画式は旧2点版と同一のため、旧プロジェクトの見た目は変わらない。</item>
+/// <item>Bloom：Amount = にじみの強さ（0〜1。0 で効果なし）、Radius = ぼかし半径（px、1〜100）。明るい部分だけを抜いてぼかし、加算で重ねる。</item>
+/// <item>LightLeak：Amount = 光漏れの強さ（0〜1。0 で効果なし）、Radius = 漏れの広がり（0.5〜2.0。1.0 が既定の広がり。大きいほど画面の奥まで届く）。画面の端（主に左上）から暖かい光が漏れた色かぶり。</item>
+/// <item>PixelSort：Amount = ソートする明るさのしきい値（0〜1。この明るさ以上の画素をソート対象にする。Amount 0 はソートなし＝変化なし）、Radius = 最大ソート長（px、8〜256。1回のソートで流れる最大の長さ）。</item>
+/// <item>Wave：Amount = 波の振幅（px、0〜100）、Radius = 波長（px、20〜1000）。x のサインで Y 方向へずらすうねり（Warp が y のサインで X 方向へずらすのに対し、こちらは垂直な方向にずらす）。</item>
+/// <item>Mirror：Amount = ミラーの位置（0〜1。分割線の位置。0.5 で中央）、Radius = 方式（0〜2 を四捨五入して使う。0 = 左右反転、1 = 左右分割ミラー、2 = 上下分割ミラー）。</item>
+/// <item>Twirl：Amount = ねじれ角（度、-360〜360。+で時計回り）、Radius = 影響半径（画面の半対角線に対する割合、0.2〜1.0。中心からこの半径の外は歪まない）。</item>
+/// <item>Displacement：Amount = 歪みの強さ（px、0〜100。0 で歪みなし）、Radius = 歪みパターンの倍率（0.5〜4.0。大きいほど細かい歪み。手続き的なノイズで歪ませる）。</item>
+/// <item>Bulge：Amount = 膨らみ（0〜1。0 で膨らみなし、1 で強く膨らむ）、Radius = 影響半径（画面の半対角線に対する割合、0.2〜1.0）。</item>
+/// <item>WaterRipple：Amount = 波の振幅（px、0〜50）、Radius = 波長（px、10〜200）。波は時刻で動く（静止画でも揺れる）。</item>
+/// <item>ColorTemp：Amount = 色温度（-1〜1。-1 で冷たい青方向、+1 で暖かい橙方向、0 で変化なし）。Radius は使わない。</item>
+/// <item>Levels：レベル補正（黒点・白点・ガンマ）。Amount = 黒点（0〜0.5。この明るさ以下を黒に潰す）、Radius = 白点（0.5〜1.0。この明るさ以上を白に飛ばす）、Midtones = ガンマ（0.2〜5.0。1.0 で変化なし。&lt;1 で明るく、&gt;1 で暗く）。</item>
+/// <item>SplitTone：スプリットトーン（ハイライトとシャドウに別々の色）。Amount = ハイライトの色相（度、0〜360。既定45 = 暖かい橙）、Radius = シャドウの色相（度、0〜360。既定220 = 冷たい青）、Midtones = 着色の強さ（0〜1。0 で着色なし）。</item>
+/// <item>GradientMap：グラデーションマップ（明暗に色を割り当てる）。Amount = 暗部の色相（度、0〜360。既定220 = 青）、Radius = 明部の色相（度、0〜360。既定45 = 橙）。暗い画素ほど暗部色、明るい画素ほど明部色に寄る。</item>
+/// <item>OldFilm：Amount = 劣化の強さ（0〜1。0 で劣化なし。傷・ほこり・ちらつきがまとめて強くなる）、Radius = 傷の密度（0〜1。0 で傷なし。多いほど傷・ほこりが増える）。傷とちらつきは時刻で変わる。</item>
+/// <item>Letterbox：Amount = 上下の黒帯の高さ（画面高さに対する割合、0〜0.25。既定0.12 = 上下各12%。0 で帯なし）。Radius は使わない。</item>
+/// <item>Scanlines：Amount = 線の濃さ（0〜1。0 で線なし、1 で真っ黒な線）、Radius = 線の間隔（px、2〜8。小さいほど細かい走査線）。</item>
+/// <item>Halftone：Amount = ドットの最大サイズ（px、2〜16。明るいほど小さいドット。大きいほど粗い）、Radius = スクリーン角度（度、0〜90。既定45）。</item>
+/// <item>EdgeDetect：Amount = エッジの強さ（0〜1。0 で効果なし。エッジを白く浮かせ、他を暗くする）、Radius = エッジと判定する勾配のしきい値（0〜1。小さいほど細かいエッジも拾う）。</item>
+/// <item>Solarize：Amount = 反転のしきい値（0〜1。この明るさ以上の画素の色を反転する。既定0.5）。Radius は使わない。</item>
+/// <item>Kuwahara：Amount = カーネル半径（px、1〜8。大きいほど絵画的だが重い）、Radius = 強さ（0〜1。0 で元の画像、1 で完全な油絵風）。画素ループが重いため 4K では注意。</item>
+/// <item>TiltShift：Amount = ぼかしの強さ（0〜1。0 でぼかしなし）、Radius = ピントの合う帯の幅（画面高さに対する割合、0.1〜0.8。既定0.3。帯の中心は画面中央）。</item>
 /// </list>
 /// </summary>
 public sealed class ClipEffect
@@ -205,7 +247,9 @@ public sealed class ClipEffect
     public double Radius { get; set; }
 
     /// <summary>
-    /// トーンカーブの中間調（-1〜1。0 が変化なし）。他の種類では使わない。
+    /// 第3パラメータ（-1〜1 などが種類ごとに決まる。0 が変化なし）。
+    /// トーンカーブの中間調・レベル補正のガンマ・スプリットトーンの着色の強さが使う。
+    /// 他の種類では使わない。
     /// 旧プロジェクトの JSON にはこの項目が無いが、読み込み時に 0 になる
     /// （System.Text.Json は欠けた項目を既定値で補う）ため、そのまま開ける。
     /// </summary>
@@ -518,12 +562,41 @@ public sealed class Clip
     /// <summary>ノイズ除去の強さ（0.0〜1.0）。書き出し時の afftdn の nr（dB）に写す。既定 0.5。</summary>
     public double NoiseReductionStrength { get; set; } = 0.5;
 
+    /// <summary>音声ノーマライズを適用するか（プレビュー・書き出し共通）。既定は無し。旧プロジェクト（JSON に項目無し）は false として開ける。</summary>
+    public bool NormalizeAudioEnabled { get; set; }
+
+    /// <summary>ノーマライズの目標ピークレベル（dBFS、-30〜0）。既定 -1 dBFS。AudioNormalizer.ClampTargetDb で丸める。</summary>
+    public double NormalizeTargetDb { get; set; } = AudioNormalizer.DefaultTargetDb;
+
+    /// <summary>
+    /// 逆再生するか。ON のとき、クリップ全体を逆向きに再生する（映像はフレームを逆向きに、
+    /// 音声も逆向きに）。旧プロジェクト（JSON に項目無し）は false として開ける
+    /// （System.Text.Json は欠けた項目を既定値で補う）。
+    /// テキスト・画像・可視化クリップでは意味を持たない（映像・音声クリップが対象）。
+    /// </summary>
+    public bool IsReversed { get; set; }
+
     public List<KeyframeTrack> KeyframeTracks { get; set; } = new();
 
     public double EndSeconds => StartSeconds + DurationSeconds;
 
     public bool IsActiveAt(double timeSeconds)
         => timeSeconds >= StartSeconds && timeSeconds < EndSeconds;
+
+    /// <summary>
+    /// タイムライン時刻に対応する素材内時刻。順再生なら InPoint + 経過時間、
+    /// 逆再生なら InPoint + Duration - 経過時間（クリップ先頭では素材の末尾、
+    /// クリップ末尾では素材の先頭になる）。経過時間は [0, Duration] に丸めるため、
+    /// トランジション区間などクリップ範囲外の時刻でも範囲内の素材時刻を返す。
+    /// 呼び出し側でタイムライン時刻がクリップ範囲内かは別に確認すること。
+    /// </summary>
+    public double GetSourceTimeSeconds(double timeSeconds)
+    {
+        var local = Math.Clamp(timeSeconds - StartSeconds, 0, DurationSeconds);
+        return IsReversed
+            ? InPointSeconds + DurationSeconds - local
+            : InPointSeconds + local;
+    }
 
     public KeyframeTrack EnsureTrack(string parameterName)
     {

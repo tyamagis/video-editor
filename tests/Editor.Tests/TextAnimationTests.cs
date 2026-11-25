@@ -282,7 +282,10 @@ public sealed class TextAnimationTests
     {
         var anim = new TextAnimation { Kind = TextAnimationKind.Typewriter, DurationSeconds = 1 };
 
-        Assert.Equal(10, TextAnimation.Evaluate(null, anim, 9, 10, 10).VisibleCharCount);
+        // アウト開始ちょうど（残り = Duration）はまだ適用範囲外で恒等（-1 = 全文字表示）。
+        // タイプライターインの終了ちょうど（-1）と対称。描画上も -1 と 10 は同じ全文字表示。
+        Assert.Equal(-1, TextAnimation.Evaluate(null, anim, 9, 10, 10).VisibleCharCount);
+        Assert.True(TextAnimation.Evaluate(null, anim, 9, 10, 10).IsIdentity);
         Assert.Equal(5, TextAnimation.Evaluate(null, anim, 9.5, 10, 10).VisibleCharCount);
         Assert.Equal(0, TextAnimation.Evaluate(null, anim, 10, 10, 10).VisibleCharCount);
     }

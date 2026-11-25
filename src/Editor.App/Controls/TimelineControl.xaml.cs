@@ -468,6 +468,9 @@ public partial class TimelineControl : UserControl
         {
             var x = visibleLeft + sx;
             var bucket = Math.Min(data.BucketCount - 1, (int)((x - rect.Left) / rect.Width * data.BucketCount));
+            if (clip.IsReversed)
+                // 逆再生では波形も左右反転する（左端が素材の末尾側になる）。
+                bucket = data.BucketCount - 1 - bucket;
             var yTop = centerY - data.MaxPeaks[bucket] * halfHeight;
             if (sx == 0)
                 path.MoveTo(x, (float)yTop);
@@ -478,6 +481,8 @@ public partial class TimelineControl : UserControl
         {
             var x = visibleLeft + sx;
             var bucket = Math.Min(data.BucketCount - 1, (int)((x - rect.Left) / rect.Width * data.BucketCount));
+            if (clip.IsReversed)
+                bucket = data.BucketCount - 1 - bucket;
             var yBottom = centerY - data.MinPeaks[bucket] * halfHeight;
             path.LineTo(x, (float)yBottom);
         }

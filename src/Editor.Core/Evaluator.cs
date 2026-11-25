@@ -190,11 +190,12 @@ public static class TimelineEvaluator
                 .FirstOrDefault(c => c.Id == binding.SourceClipId);
             if (source is null || string.IsNullOrEmpty(source.SourcePath))
                 continue;
-            // タイムライン時刻を音源クリップの素材内時刻へ変換する。
-            var sourceTime = source.InPointSeconds + (timeSeconds - source.StartSeconds);
-            if (sourceTime < source.InPointSeconds - 1e-6
-                || sourceTime > source.InPointSeconds + source.DurationSeconds + 1e-6)
+            // タイムライン時刻を音源クリップの素材内時刻へ変換する
+            // （逆再生の音源なら、逆向きに進む位置のエネルギーになる）。
+            if (timeSeconds < source.StartSeconds - 1e-6
+                || timeSeconds > source.EndSeconds + 1e-6)
                 continue; // 音源がその時刻に流れていない。
+            var sourceTime = source.GetSourceTimeSeconds(timeSeconds);
             var energy = audio.GetBandEnergy(source.Id, sourceTime, binding.LowHz, binding.HighHz);
             value = binding.CombineWith(value, binding.MapValue(energy));
         }

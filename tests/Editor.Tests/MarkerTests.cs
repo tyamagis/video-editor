@@ -119,7 +119,7 @@ public sealed class MarkerTests
         project.AddMarker(8, "C");
 
         Assert.Equal("B", project.NextMarkerAfter(3)?.Name);
-        Assert.Equal("B", project.NextMarkerAfter(5)?.Name); // ちょうど 5s の B は「次」ではない。
+        Assert.Equal("C", project.NextMarkerAfter(5)?.Name); // ちょうど 5s の B は「次」ではないので、次は 8s の C。
         Assert.Null(project.NextMarkerAfter(8));
         Assert.Null(project.NextMarkerAfter(100));
     }

@@ -1,6 +1,7 @@
 // 書き出しプリセットの単体テスト（ExportPreset / ExportPresetStore / ExportSettings の検証）。
 // ファイルの読み書きだけを対象とし、ダイアログ（WPF）や ffmpeg の実行は扱わない。
 
+using Editor.Core;
 using Editor.Media;
 using Xunit;
 

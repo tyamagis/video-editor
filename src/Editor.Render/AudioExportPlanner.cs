@@ -5,18 +5,19 @@
 // この計画を受け取り、ffmpeg の起動とフレームのパイプだけを行う。
 
 using Editor.Core;
-using Editor.Media;
 
 namespace Editor.Render;
 
 /// <summary>書き出し範囲の音声ミックス計画を作る。読めない素材は音声なしで進む。</summary>
 internal sealed class AudioExportPlanner
 {
-    private readonly MediaProbe _probe;
+    private readonly IMediaProbe _probe;
+    private readonly IAudioPeakProvider? _peakProvider;
 
-    public AudioExportPlanner(MediaProbe probe)
+    public AudioExportPlanner(IMediaProbe probe, IAudioPeakProvider? peakProvider = null)
     {
         _probe = probe;
+        _peakProvider = peakProvider;
     }
 
     /// <summary>書き出し範囲に入る音声つきクリップの入力計画を作る。音声が無ければ MapLabel は null。</summary>
@@ -57,15 +58,28 @@ internal sealed class AudioExportPlanner
             var sourceEnd = clip.InPointSeconds + (overlapEnd - clip.StartSeconds);
             var delayMs = (long)Math.Round((overlapStart - startSeconds) * 1000);
             var label = $"a{index}";
-            // ノイズ除去が有効なクリップは、書き出し時に afftdn で背景ノイズを減らす
-            // （設計プラン 5章で FFmpeg のフィルタが第一候補。プレビューでは反映されない）。
-            // atrim の前に掛けることで、ファイル全体からノイズ特性を取る。
-            var denoise = clip.NoiseReductionEnabled
-                ? $"afftdn=nr={NoiseReductionDb(clip.NoiseReductionStrength):F1}:nf=-50,"
-                : string.Empty;
-            // 書き出し範囲に入る部分だけ切り出し、範囲内の位置まで遅らせる。
-            var filter = $"[{index}:a]{denoise}atrim=start={sourceStart:F3}:end={sourceEnd:F3}," +
-                         $"asetpts=PTS-STARTPTS,adelay={delayMs}:all=1[{label}]";
+            // ノーマライズが有効なクリップは、クリップの使用範囲のピークから
+            // ゲインを計算する（プレビューと同じ計算・同じ提供口。ピークは
+            // 書き出し範囲ではなくクリップの使用範囲で測るため、書き出し範囲を
+            // 変えてもゲインは変わらない）。ピークが測れなければ等倍で書き出す。
+            var normalizeGain = 1.0;
+            if (clip.NormalizeAudioEnabled && _peakProvider is not null)
+            {
+                try
+                {
+                    var peak = await _peakProvider
+                        .GetPeakAsync(clip.SourcePath, clip.InPointSeconds, clip.DurationSeconds, ct)
+                        .ConfigureAwait(false);
+                    if (peak.Available)
+                        normalizeGain = AudioNormalizer.ComputeGain(peak.PeakLinear, clip.NormalizeTargetDb);
+                }
+                catch
+                {
+                    // ピーク解析の失敗で書き出しを止めない（元の音量で書き出す）。
+                }
+            }
+            // フィルタ（ノイズ除去・ノーマライズ・切り出し・逆再生・遅延）は BuildClipFilter が作る。
+            var filter = BuildClipFilter(index, clip, sourceStart, sourceEnd, delayMs, label, normalizeGain);
             inputs.Add(new AudioInput(clip.SourcePath, filter, label));
             index++;
         }
@@ -77,9 +91,39 @@ internal sealed class AudioExportPlanner
         return (inputs, mapLabel);
     }
 
+    /// <summary>
+    /// 音声クリップ1つのフィルタを作る。書き出し範囲に入る部分だけ切り出し、
+    /// 逆再生なら切り出した区間を逆向きにしてから、範囲内の位置まで遅らせる。
+    /// areverse は atrim の後に掛ける（切り出した区間だけを逆向きにするため。
+    /// atrim の前に掛けると切り出し位置の対応が逆転してしまう）。
+    /// areverse の後に asetpts で PTS を振り直す（areverse が PTS をどう扱うかに
+    /// 依存せず、遅延の基準をそろえるため）。
+    /// normalizeGain はノーマライズの線形倍率（1.0 が等倍）。volume フィルタは
+    /// atrim の前に掛ける（ゲインは線形のため、atrim の前後で結果は同じ）。
+    /// </summary>
+    internal static string BuildClipFilter(
+        int index, Clip clip, double sourceStart, double sourceEnd, long delayMs, string label,
+        double normalizeGain = 1.0)
+    {
+        // ノイズ除去が有効なクリップは afftdn で背景ノイズを減らす
+        // （設計プラン 5章で FFmpeg のフィルタが第一候補。プレビューでは反映されない）。
+        // atrim の前に掛けることで、ファイル全体からノイズ特性を取る。
+        var denoise = clip.NoiseReductionEnabled
+            ? $"afftdn=nr={NoiseReductionDb(clip.NoiseReductionStrength):F1}:nf=-50,"
+            : string.Empty;
+        var normalize = VolumeFilter(normalizeGain);
+        var reverse = clip.IsReversed ? "areverse," : string.Empty;
+        return $"[{index}:a]{denoise}{normalize}atrim=start={sourceStart:F3}:end={sourceEnd:F3}," +
+               $"{reverse}asetpts=PTS-STARTPTS,adelay={delayMs}:all=1[{label}]";
+    }
+
     /// <summary>ノイズ除去の強さ（0.0〜1.0）を afftdn の nr（dB、1〜30）に写す。</summary>
     private static double NoiseReductionDb(double strength)
         => 1.0 + Math.Clamp(strength, 0, 1) * 29.0;
+
+    /// <summary>ノーマライズのゲイン（線形倍率）を ffmpeg の volume フィルタにする。等倍（1.0）のときは空文字（フィルタを付けない）。</summary>
+    internal static string VolumeFilter(double gain)
+        => Math.Abs(gain - 1.0) <= 1e-6 ? string.Empty : $"volume={gain:F4},";
 
 
 }

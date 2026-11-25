@@ -39,14 +39,16 @@ public static class VisualizationRenderer
             .FirstOrDefault(c => c.Id == settings.SourceClipId);
         if (source is null || string.IsNullOrEmpty(source.SourcePath))
             return;
-        var sourceTime = source.InPointSeconds + (timeSeconds - source.StartSeconds);
-        if (sourceTime < source.InPointSeconds - 1e-6
-            || sourceTime > source.InPointSeconds + source.DurationSeconds + 1e-6)
+        // タイムライン時刻を素材内時刻へ変換する
+        // （逆再生の音源なら、逆向きに進む位置の波形・スペクトルになる）。
+        if (timeSeconds < source.StartSeconds - 1e-6
+            || timeSeconds > source.EndSeconds + 1e-6)
             return; // 音源がその時刻に流れていない。
+        var sourceTime = source.GetSourceTimeSeconds(timeSeconds);
         if (!provider.IsAnalyzed(source.Id))
             return; // 解析前は描かない（解析は ViewModel が裏で走らせる）。
 
-        var color = TimelineFrameRenderer.ParseColor(settings.ColorHex, state.Opacity);
+        var color = RenderHelpers.ParseColor(settings.ColorHex, state.Opacity);
 
         canvas.Save();
         canvas.Translate((float)(width / 2.0 + state.PositionX), (float)(height / 2.0 + state.PositionY));
@@ -165,7 +167,7 @@ public static class VisualizationRenderer
             -width / 2f, height / 2f - maxBarHeight,
             width / 2f, height / 2f);
         DrawSpectrumBars(canvas, barArea, bands, color, settings.Gain,
-            TimelineFrameRenderer.MapBlendMode(blendMode));
+            RenderHelpers.MapBlendMode(blendMode));
     }
 
     /// <summary>
@@ -206,7 +208,7 @@ public static class VisualizationRenderer
             Style = SKPaintStyle.Stroke,
             StrokeCap = SKStrokeCap.Round,
             StrokeJoin = SKStrokeJoin.Round,
-            BlendMode = TimelineFrameRenderer.MapBlendMode(blendMode)
+            BlendMode = RenderHelpers.MapBlendMode(blendMode)
         };
         canvas.DrawPath(path, paint);
     }
@@ -253,7 +255,7 @@ public static class VisualizationRenderer
                 Style = SKPaintStyle.Stroke,
                 StrokeCap = SKStrokeCap.Round,
                 StrokeJoin = SKStrokeJoin.Round,
-                BlendMode = TimelineFrameRenderer.MapBlendMode(blendMode)
+                BlendMode = RenderHelpers.MapBlendMode(blendMode)
             };
             canvas.DrawPath(path, paint);
         }

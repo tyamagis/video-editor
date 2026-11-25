@@ -68,7 +68,7 @@ public sealed class WaveformCache
             if (!File.Exists(path))
                 return null;
             var info = new FileInfo(path);
-            var cachePath = AudioAnalysisCache.GetCacheFileBase(cacheDirectory, path) + ".waveform.json";
+            var cachePath = CacheFileNaming.GetCacheFilePath(cacheDirectory, path, ".waveform.json");
             if (!File.Exists(cachePath))
                 return null;
 
@@ -78,15 +78,11 @@ public sealed class WaveformCache
                 return null;
 
             // 身元の照合。1つでも合わなければ古いキャッシュとして無視する。
+            // 照合は SourceIdentity に委譲する（従来と同じ：フルパス＋サイズ＋更新日時）。
             if (entry.Version != CacheVersion)
                 return null;
-            if (!string.Equals(
-                    Path.GetFullPath(entry.SourcePath),
-                    Path.GetFullPath(path),
-                    StringComparison.OrdinalIgnoreCase))
-                return null;
-            if (entry.Length != info.Length
-                || entry.LastWriteTimeUtcTicks != info.LastWriteTimeUtc.Ticks)
+            if (!new SourceIdentity(entry.SourcePath, entry.Length, entry.LastWriteTimeUtcTicks)
+                    .Matches(info))
                 return null; // 素材が差し替え・上書きされた。
             if (entry.BucketCount != bucketCount
                 || entry.MinPeaks.Length != bucketCount
@@ -113,12 +109,13 @@ public sealed class WaveformCache
     public static void Save(string path, WaveformData data, string cacheDirectory)
     {
         var info = new FileInfo(path);
+        var identity = SourceIdentity.Capture(info);
         var entry = new WaveformCacheEntry
         {
             Version = CacheVersion,
-            SourcePath = Path.GetFullPath(path),
-            Length = info.Length,
-            LastWriteTimeUtcTicks = info.LastWriteTimeUtc.Ticks,
+            SourcePath = identity.FullPath,
+            Length = identity.Length,
+            LastWriteTimeUtcTicks = identity.LastWriteTimeUtcTicks,
             SampleRate = data.SampleRate,
             DurationSeconds = data.DurationSeconds,
             BucketCount = data.BucketCount,
@@ -126,7 +123,7 @@ public sealed class WaveformCache
             MaxPeaks = data.MaxPeaks
         };
         Directory.CreateDirectory(cacheDirectory);
-        var cachePath = AudioAnalysisCache.GetCacheFileBase(cacheDirectory, path) + ".waveform.json";
+        var cachePath = CacheFileNaming.GetCacheFilePath(cacheDirectory, path, ".waveform.json");
         AtomicFile.WriteAllText(cachePath, JsonSerializer.Serialize(entry, JsonDefaults.Indented));
     }
 

@@ -4,6 +4,7 @@
 // 解析は事前にフレームごと行い、キャッシュする。再生中に都度FFTはしない。
 
 using System.IO;
+using Editor.Core;
 using MathNet.Numerics;
 using MathNet.Numerics.IntegralTransforms;
 using NAudio.Wave;
@@ -108,9 +109,8 @@ public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvid
     /// <summary>ファイル1つ分の解析結果。公開後は不変。</summary>
     private sealed class Analysis
     {
-        public required string SourcePath { get; init; }
-        public required long Length { get; init; }
-        public required DateTime LastWriteTimeUtc { get; init; }
+        /// <summary>素材の身元（フルパス＋サイズ＋更新日時）。キャッシュの照合に使う。</summary>
+        public required SourceIdentity Identity { get; init; }
         public required int SampleRate { get; init; }
         public required double FrameRate { get; init; }
         public required double DurationSeconds { get; init; }
@@ -150,10 +150,9 @@ public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvid
         var info = new FileInfo(sourcePath);
         lock (_gate)
         {
-            // 同じファイル（サイズ・更新日時・フレームレートが同じ）なら解析し直さない。
+            // 同じファイル（身元・フレームレートが同じ）なら解析し直さない。
             if (_byPath.TryGetValue(sourcePath, out var existing)
-                && existing.Length == info.Length
-                && existing.LastWriteTimeUtc == info.LastWriteTimeUtc
+                && existing.Identity.Matches(info)
                 && Math.Abs(existing.FrameRate - analysisRate) < 1e-9)
             {
                 _clipToPath[clipId] = sourcePath;
@@ -197,9 +196,8 @@ public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvid
     /// <summary>ディスクキャッシュの内容からメモリ用の解析結果を作る。</summary>
     private static Analysis FromCached(CachedAudioAnalysis cached) => new()
     {
-        SourcePath = cached.SourcePath,
-        Length = cached.Length,
-        LastWriteTimeUtc = cached.LastWriteTimeUtc,
+        Identity = new SourceIdentity(
+            cached.SourcePath, cached.Length, cached.LastWriteTimeUtc.Ticks),
         SampleRate = cached.SampleRate,
         FrameRate = cached.FrameRate,
         DurationSeconds = cached.DurationSeconds,
@@ -212,9 +210,9 @@ public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvid
     /// <summary>メモリ用の解析結果をディスクキャッシュ用の形に変換する。</summary>
     private static CachedAudioAnalysis ToCached(Analysis analysis) => new()
     {
-        SourcePath = analysis.SourcePath,
-        Length = analysis.Length,
-        LastWriteTimeUtc = analysis.LastWriteTimeUtc,
+        SourcePath = analysis.Identity.FullPath,
+        Length = analysis.Identity.Length,
+        LastWriteTimeUtc = analysis.Identity.LastWriteTimeUtc,
         SampleRate = analysis.SampleRate,
         FrameRate = analysis.FrameRate,
         DurationSeconds = analysis.DurationSeconds,
@@ -233,9 +231,7 @@ public sealed class AudioBandEnergyProvider : Editor.Core.IAudioBandEnergyProvid
         var (left, right, stereoRate) = ReadStereoDownsampled(sourcePath);
         return new Analysis
         {
-            SourcePath = sourcePath,
-            Length = info.Length,
-            LastWriteTimeUtc = info.LastWriteTimeUtc,
+            Identity = SourceIdentity.Capture(info),
             SampleRate = sampleRate,
             FrameRate = analysisRate,
             DurationSeconds = duration,

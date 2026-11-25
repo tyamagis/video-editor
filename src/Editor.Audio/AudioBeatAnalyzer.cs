@@ -6,6 +6,7 @@
 // キャッシュする（同じファイルの再検出は計算しない）。
 
 using System.IO;
+using Editor.Core;
 using NAudio.Wave;
 
 namespace Editor.Audio;
@@ -62,7 +63,8 @@ public sealed class AudioBeatAnalyzer
     private readonly Dictionary<string, CacheEntry> _cache = new();
     private readonly object _cacheLock = new();
 
-    private sealed record CacheEntry(long Length, DateTime LastWriteTimeUtc, BeatDetectionResult Result);
+    /// <summary>素材の身元（フルパス＋サイズ＋更新日時）と検出結果。</summary>
+    private sealed record CacheEntry(SourceIdentity Identity, BeatDetectionResult Result);
 
     /// <summary>
     /// 音声ファイルを解析し、BPMと拍時刻を返す。同じファイル（サイズ・更新時刻が同じ）は
@@ -98,8 +100,7 @@ public sealed class AudioBeatAnalyzer
         lock (_cacheLock)
         {
             if (_cache.TryGetValue(key, out var entry)
-                && entry.Length == info.Length
-                && entry.LastWriteTimeUtc == info.LastWriteTimeUtc)
+                && entry.Identity.Matches(info))
                 return entry.Result;
         }
 
@@ -109,7 +110,7 @@ public sealed class AudioBeatAnalyzer
         {
             if (_cache.Count >= MaxCacheEntries)
                 _cache.Clear();
-            _cache[key] = new CacheEntry(info.Length, info.LastWriteTimeUtc, result);
+            _cache[key] = new CacheEntry(SourceIdentity.Capture(info), result);
         }
         return result;
     }

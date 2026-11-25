@@ -9,31 +9,16 @@
 // フォールバックするので、プレビューが真っ黒になることはない。
 
 using System.Diagnostics;
+using Editor.Core;
 
 namespace Editor.Media;
-
-/// <summary>1フレーム分の生画素（BGRA）とその時刻・サイズ。</summary>
-public sealed record VideoFrameData(byte[] Bgra, int Width, int Height, double TimeSeconds);
-
-/// <summary>常駐 ffmpeg からのフレーム取得口。</summary>
-public interface IStreamingFrameSource
-{
-    /// <summary>
-    /// 指定時刻のフレームを返す。映像の終端より後の時刻は null。
-    /// 取得できない場合（ffmpeg 不在など）は例外を投げ、呼び出し側が
-    /// 単発抽出にフォールバックする。
-    /// </summary>
-    Task<VideoFrameData?> GetFrameAsync(
-        string sourcePath, double timeSeconds, int maxWidth,
-        CancellationToken ct = default);
-}
 
 /// <summary>ffmpeg を常駐させて rawvideo を連続で読むフレーム取得。</summary>
 public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
 {
     private readonly FfmpegSettings _settings;
     private readonly MediaProbe _probe;
-    private readonly Dictionary<string, MediaInfo> _probeCache = new();
+    private readonly Dictionary<string, (MediaInfo Info, SourceIdentity Identity)> _probeCache = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>同時に保持する ffmpeg セッションの上限。トランジションで2素材を交互に読むため 2。</summary>
@@ -160,15 +145,7 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         var hwaccel = _hwaccelDisabled ? string.Empty : "-hwaccel auto ";
         var args = $"-nostdin -loglevel error {hwaccel}-ss {startSeconds:F3} -i \"{sourcePath}\" " +
                    $"-an -vf scale={maxWidth}:{outHeight} -pix_fmt bgra -f rawvideo -";
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _settings.FfmpegExePath,
-            Arguments = args,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
+        var startInfo = FfmpegProcess.CreateStartInfo(_settings.FfmpegExePath, args);
 
         var process = new Process { StartInfo = startInfo };
         try
@@ -220,12 +197,17 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
 
     private async Task<MediaInfo?> GetInfoAsync(string path, CancellationToken ct)
     {
-        if (_probeCache.TryGetValue(path, out var cached))
-            return cached;
+        // 素材が差し替えられていないか、身元（パス＋サイズ＋更新日時）で照合する。
+        // 以前はパスだけで引いていたため、差し替え後の古い映像情報が残り続けた。
+        if (_probeCache.TryGetValue(path, out var cached)
+            && SourceIdentity.TryCapture(path, out var current)
+            && cached.Identity.Matches(current))
+            return cached.Info;
         try
         {
             var info = await _probe.ProbeAsync(path, ct).ConfigureAwait(false);
-            _probeCache[path] = info;
+            if (SourceIdentity.TryCapture(path, out var fresh))
+                _probeCache[path] = (info, fresh);
             return info;
         }
         catch

@@ -658,6 +658,31 @@
               <TextBlock Text="書き出し時に FFmpeg のノイズ除去（afftdn）で適用されます。プレビューでは効果が聞けません。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
             </StackPanel>
 
+            <TextBlock Text="逆再生" FontWeight="SemiBold" Margin="0,12,0,4" Foreground="{StaticResource AppForeground}" />
+            <StackPanel IsEnabled="{Binding HasAudioClip}">
+              <CheckBox Content="逆再生する" IsChecked="{Binding SelectedClipIsReversed, Mode=TwoWay}" Foreground="{StaticResource AppForeground}" />
+              <TextBlock Text="クリップ全体を逆向きに再生します。映像はフレームが逆向きに、音声も逆向きになります。プレビューと書き出しの両方に反映されます。逆再生中のプレビューは、フレームを1枚ずつシークして取り出すため、通常より遅くなることがあります。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
+            </StackPanel>
+
+            <TextBlock Text="音声ノーマライズ" FontWeight="SemiBold" Margin="0,12,0,4" Foreground="{StaticResource AppForeground}" />
+            <StackPanel IsEnabled="{Binding HasAudioClip}">
+              <CheckBox Content="音声ノーマライズを有効にする" IsChecked="{Binding SelectedClipNormalizeAudioEnabled, Mode=TwoWay}" Foreground="{StaticResource AppForeground}" />
+              <Grid Margin="0,4,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="64" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="52" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="目標ピーク" VerticalAlignment="Center" Foreground="{StaticResource AppForeground}" />
+                <Slider Grid.Column="1" Minimum="-30" Maximum="0" VerticalAlignment="Center"
+                        Value="{Binding SelectedClipNormalizeTargetDb, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                        GotFocus="EditableField_GotFocus" />
+                <TextBlock Grid.Column="2" Text="{Binding SelectedClipNormalizeTargetDb, StringFormat={}{0:F1} dB}" VerticalAlignment="Center" HorizontalAlignment="Right" Foreground="{StaticResource AppForeground}" />
+              </Grid>
+              <TextBlock Text="{Binding NormalizeHint}" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
+              <TextBlock Text="クリップの音声のピークを目標レベルにそろえます。プレビューと書き出しで同じゲインが使われます。ゲインは +40 dB で止まるため、とても小さい音は目標に届かない場合があります。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
+            </StackPanel>
+
             <TextBlock Text="マーカー" FontWeight="SemiBold" Margin="0,12,0,4" Foreground="{StaticResource AppForeground}" />
             <StackPanel>
               <Grid Margin="0,0,0,2">

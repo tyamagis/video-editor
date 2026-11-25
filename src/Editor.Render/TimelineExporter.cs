@@ -8,7 +8,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Editor.Core;
-using Editor.Media;
 
 namespace Editor.Render;
 
@@ -24,14 +23,15 @@ public interface ITimelineExporter
 public sealed class FrameSequenceExporter : ITimelineExporter
 {
     private readonly IFrameRenderer _renderer;
-    private readonly FfmpegSettings _settings;
+    private readonly IFfmpegConfiguration _ffmpeg;
     private readonly AudioExportPlanner _audioPlanner;
 
-    public FrameSequenceExporter(IFrameRenderer renderer, FfmpegSettings settings, MediaProbe probe)
+    public FrameSequenceExporter(IFrameRenderer renderer, IFfmpegConfiguration ffmpeg, IMediaProbe probe,
+        IAudioPeakProvider? peakProvider = null)
     {
         _renderer = renderer;
-        _settings = settings;
-        _audioPlanner = new AudioExportPlanner(probe);
+        _ffmpeg = ffmpeg;
+        _audioPlanner = new AudioExportPlanner(probe, peakProvider);
     }
 
     public async Task ExportAsync(
@@ -74,7 +74,7 @@ public sealed class FrameSequenceExporter : ITimelineExporter
         }
 
         // 標準入力へ生フレームを送るため RedirectStandardInput を有効にする。
-        var startInfo = FfmpegProcess.CreateStartInfo(_settings.FfmpegExePath, args, redirectStandardInput: true);
+        var startInfo = ProcessStartInfoFactory.CreateStartInfo(_ffmpeg.FfmpegExePath, args, redirectStandardInput: true);
 
         using var process = new Process { StartInfo = startInfo };
         process.Start();

@@ -22,7 +22,19 @@ public static class TimelineEditor
         var offset = timeSeconds - clip.StartSeconds;
         var second = clip.Clone();
         second.StartSeconds = timeSeconds;
-        second.InPointSeconds = clip.InPointSeconds + offset;
+        if (clip.IsReversed)
+        {
+            // 逆再生：タイムラインの後半は素材の手前側になる。
+            // 後半の素材範囲は [InPoint, InPoint+Duration-offset]（イン点は変わらない）。
+            // 前半の素材範囲は [InPoint+Duration-offset, InPoint+Duration] になるので、
+            // 前半のイン点を後ろへずらす（後半の長さ分だけ前半の末尾が前に来る）。
+            second.InPointSeconds = clip.InPointSeconds;
+            clip.InPointSeconds = clip.InPointSeconds + clip.DurationSeconds - offset;
+        }
+        else
+        {
+            second.InPointSeconds = clip.InPointSeconds + offset;
+        }
         second.DurationSeconds = clip.EndSeconds - timeSeconds;
 
         // 分割で生まれる後半は元のクリップの途中からの続き。
@@ -55,7 +67,10 @@ public static class TimelineEditor
             throw new ArgumentOutOfRangeException(nameof(newStartSeconds), "トリミング位置がクリップ範囲外です。");
 
         var delta = newStartSeconds - clip.StartSeconds;
-        clip.InPointSeconds += delta;
+        if (!clip.IsReversed)
+            // 順再生：先頭を削るとイン点が後ろへずれる。
+            // 逆再生：先頭は素材の末尾側を再生しているので、削ってもイン点（素材範囲の先頭）は変わらない。
+            clip.InPointSeconds += delta;
         clip.DurationSeconds -= delta;
         clip.StartSeconds = newStartSeconds;
     }
@@ -66,6 +81,9 @@ public static class TimelineEditor
         if (newEndSeconds <= clip.StartSeconds || newEndSeconds > clip.EndSeconds)
             throw new ArgumentOutOfRangeException(nameof(newEndSeconds), "トリミング位置がクリップ範囲外です。");
 
+        if (clip.IsReversed)
+            // 逆再生：末尾は素材の先頭側を再生しているので、削った分だけイン点が後ろへずれる。
+            clip.InPointSeconds += clip.EndSeconds - newEndSeconds;
         clip.DurationSeconds = newEndSeconds - clip.StartSeconds;
     }
 

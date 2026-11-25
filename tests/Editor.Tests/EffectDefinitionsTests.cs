@@ -24,12 +24,12 @@ public sealed class EffectDefinitionsTests
         EffectKind.ToneCurve
     };
 
-    /// <summary>全 EffectKind（既存17種＋新9種＝26種）に定義があること。</summary>
+    /// <summary>全 EffectKind（既存26種＋新21種＝47種）に定義があること。</summary>
     [Fact]
     public void AllKinds_HaveDefinitions()
     {
         var kinds = Enum.GetValues<EffectKind>();
-        Assert.Equal(26, kinds.Length);
+        Assert.Equal(47, kinds.Length);
         foreach (var kind in kinds)
         {
             var definition = EffectDefinitions.Get(kind);
@@ -40,7 +40,7 @@ public sealed class EffectDefinitionsTests
         }
     }
 
-    /// <summary>AllDefinitions が全26種を EffectKind の順で並べ、表示名・説明が空でなく重複しないこと（XAML の ComboBox はこの一覧を表示する）。</summary>
+    /// <summary>AllDefinitions が全47種を EffectKind の順で並べ、表示名・説明が空でなく重複しないこと（XAML の ComboBox はこの一覧を表示する）。</summary>
     [Fact]
     public void AllDefinitions_CoversAllKindsInEnumOrder()
     {
@@ -48,7 +48,7 @@ public sealed class EffectDefinitionsTests
         var kinds = Enum.GetValues<EffectKind>();
         Assert.Equal(kinds.Length, definitions.Count);
         Assert.Equal(kinds, definitions.Select(definition => definition.Kind));
-        Assert.Equal(26, definitions.Select(definition => definition.DisplayName).Distinct().Count());
+        Assert.Equal(47, definitions.Select(definition => definition.DisplayName).Distinct().Count());
         foreach (var definition in definitions)
         {
             Assert.False(string.IsNullOrWhiteSpace(definition.DisplayName));
@@ -194,7 +194,7 @@ public sealed class EffectDefinitionsTests
         Assert.Equal(4, silent.Effects[0].Amount);
     }
 
-    /// <summary>トーンカーブの第3パラメータ（中間調）の定義：ラベル・既定値・範囲がテーブルに載り、他の種類は使わないこと。</summary>
+    /// <summary>トーンカーブの第3パラメータ（中間調）の定義：ラベル・既定値・範囲がテーブルに載ること。第3パラメータを使うのはトーンカーブ・レベル補正・スプリットトーンだけ。</summary>
     [Fact]
     public void ToneCurve_ThirdParameter_Definition()
     {
@@ -208,10 +208,29 @@ public sealed class EffectDefinitionsTests
         Assert.Contains("中間調", definition.Description);
         foreach (var kind in Enum.GetValues<EffectKind>())
         {
-            if (kind == EffectKind.ToneCurve)
+            if (kind is EffectKind.ToneCurve or EffectKind.Levels or EffectKind.SplitTone)
                 continue;
             Assert.False(EffectDefinitions.Get(kind)!.UsesThird, kind.ToString());
         }
+    }
+
+    /// <summary>レベル補正の第3パラメータ（ガンマ）とスプリットトーンの第3パラメータ（強さ）の定義。</summary>
+    [Fact]
+    public void LevelsAndSplitTone_ThirdParameter_Definition()
+    {
+        var levels = EffectDefinitions.Get(EffectKind.Levels)!;
+        Assert.True(levels.UsesThird);
+        Assert.Equal("ガンマ", levels.ThirdLabel);
+        Assert.Equal(1, levels.DefaultThird);
+        Assert.Equal(0.2, levels.ThirdMin);
+        Assert.Equal(5, levels.ThirdMax);
+
+        var splitTone = EffectDefinitions.Get(EffectKind.SplitTone)!;
+        Assert.True(splitTone.UsesThird);
+        Assert.Equal("強さ", splitTone.ThirdLabel);
+        Assert.Equal(0.5, splitTone.DefaultThird);
+        Assert.Equal(0, splitTone.ThirdMin);
+        Assert.Equal(1, splitTone.ThirdMax);
     }
 
     /// <summary>中間調の丸め：第3パラメータを使う種類は範囲内、使わない種類はそのまま。</summary>

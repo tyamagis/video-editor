@@ -17,4 +17,9 @@
     <ProjectReference Include="..\Editor.Core\Editor.Core.csproj" />
   </ItemGroup>
 
+  <!-- テストから internal な逆再生リーダーを呼べるようにする（Render と同じ扱い）。 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Editor.Tests" />
+  </ItemGroup>
+
 </Project>

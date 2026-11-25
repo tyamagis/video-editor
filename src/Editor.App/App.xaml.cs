@@ -35,15 +35,18 @@ public partial class App : Application
         var beatAnalyzer = new AudioBeatAnalyzer();
         var silenceDetector = new SilenceDetector();
         var bandProvider = new AudioBandEnergyProvider();
+        // ピーク解析（音声ノーマライズ用）。プレビューと書き出しで同じ
+        // インスタンスを共有し、メモリキャッシュも共有する。
+        var peakAnalyzer = new PeakAnalyzer();
         _streamingFrameSource = new StreamingFrameSource(ffmpegSettings, mediaProbe);
 
         IFrameRenderer frameRenderer = new TimelineFrameRenderer(thumbnailService, _streamingFrameSource, bandProvider, bandProvider);
         var previewRenderer = new PreviewRenderer(frameRenderer);
-        ITimelineExporter timelineExporter = new FrameSequenceExporter(frameRenderer, ffmpegSettings, mediaProbe);
+        ITimelineExporter timelineExporter = new FrameSequenceExporter(frameRenderer, ffmpegSettings, mediaProbe, peakAnalyzer);
 
         var viewModel = new MainViewModel(
             mediaProbe, exportService, waveformCache,
-            previewRenderer, timelineExporter, ffmpegSettings, beatAnalyzer, bandProvider, silenceDetector);
+            previewRenderer, timelineExporter, ffmpegSettings, beatAnalyzer, bandProvider, silenceDetector, peakAnalyzer);
 
         var window = new MainWindow
         {

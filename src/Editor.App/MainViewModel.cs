@@ -26,6 +26,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
     private readonly ITimelineExporter _timelineExporter;
     private readonly FfmpegSettings _ffmpegSettings;
     private readonly AudioBandEnergyProvider _bandProvider;
+    private readonly IAudioPeakProvider _peakProvider;
     private readonly Dispatcher _uiDispatcher;
 
     private readonly DispatcherTimer _playTimer;
@@ -33,6 +34,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
     private EditorProject _project = new();
     private Clip? _selectedClip;
     private MediaItem? _selectedMediaItem;
+
+    /// <summary>ノーマライズの状態についての説明文（測定したピークと適用されるゲインなど）。</summary>
+    private string _normalizeHint = string.Empty;
+
+    /// <summary>音声再生の開始世代。ピーク解析を待っている間に再生が止められたり
+    /// 鳴らし直されたりしたら、古い世代の再生は捨てる。</summary>
+    private int _audioPlayGeneration;
     private double _playheadSeconds;
     private bool _isPlaying;
     private bool _showWaveform = true;
@@ -76,7 +84,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         FfmpegSettings ffmpegSettings,
         AudioBeatAnalyzer beatAnalyzer,
         AudioBandEnergyProvider bandProvider,
-        SilenceDetector silenceDetector)
+        SilenceDetector silenceDetector,
+        IAudioPeakProvider? peakProvider = null)
     {
         _mediaProbe = mediaProbe;
         _exportService = exportService;
@@ -85,6 +94,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         _timelineExporter = timelineExporter;
         _ffmpegSettings = ffmpegSettings;
         _bandProvider = bandProvider;
+        _peakProvider = peakProvider ?? new PeakAnalyzer();
         _uiDispatcher = Dispatcher.CurrentDispatcher;
 
         _playTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.0 / 30) };
@@ -165,6 +175,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             OnPropertyChanged(nameof(CanSilenceCut));
             OnPropertyChanged(nameof(SelectedClipNoiseReductionEnabled));
             OnPropertyChanged(nameof(SelectedClipNoiseReductionStrength));
+            OnPropertyChanged(nameof(SelectedClipNormalizeAudioEnabled));
+            OnPropertyChanged(nameof(SelectedClipNormalizeTargetDb));
+            OnPropertyChanged(nameof(NormalizeHint));
+            OnPropertyChanged(nameof(SelectedClipIsReversed));
             OnPropertyChanged(nameof(CanAddKeyframeAtPlayhead));
             OnPropertyChanged(nameof(AudioBindingHint));
             OnPropertyChanged(nameof(IsVisualizationClipSelected));
@@ -203,6 +217,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             RefreshKeyframeRows();
             RefreshEffectRows();
             RefreshAudioBindingRows();
+            _ = RefreshNormalizeHintAsync();
         }
     }
 
@@ -482,6 +497,111 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
                 return;
             SelectedClip.NoiseReductionStrength = Math.Clamp(value, 0.0, 1.0);
             OnPropertyChanged();
+        }
+    }
+
+    // ---- 音声ノーマライズ（インスペクタ） ----
+
+    /// <summary>選択中クリップの音声ノーマライズの有効・無効（プレビュー・書き出し共通）。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。有効にしたらピーク解析を裏で走らせる（再生時に待たずに済むよう先読みする）。</summary>
+    public bool SelectedClipNormalizeAudioEnabled
+    {
+        get => SelectedClip?.NormalizeAudioEnabled ?? false;
+        set
+        {
+            if (SelectedClip is null || SelectedClip.NormalizeAudioEnabled == value)
+                return;
+            BeginEdit();
+            SelectedClip.NormalizeAudioEnabled = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(NormalizeHint));
+            _ = RefreshNormalizeHintAsync();
+        }
+    }
+
+    /// <summary>選択中クリップのノーマライズの目標ピークレベル（dBFS、-30〜0）。クリップ未選択時は -1。ピークは目標に依存しないため、変えても再解析は要らない（キャッシュ済みのピークからゲインを計算し直すだけ）。</summary>
+    public double SelectedClipNormalizeTargetDb
+    {
+        get => SelectedClip?.NormalizeTargetDb ?? AudioNormalizer.DefaultTargetDb;
+        set
+        {
+            if (SelectedClip is null)
+                return;
+            SelectedClip.NormalizeTargetDb = AudioNormalizer.ClampTargetDb(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(NormalizeHint));
+            _ = RefreshNormalizeHintAsync();
+        }
+    }
+
+    /// <summary>ノーマライズの状態についての説明文（測定したピークと適用されるゲインなど）。選択クリップが変わる・設定が変わると裏で更新する。</summary>
+    public string NormalizeHint
+    {
+        get => _normalizeHint;
+        private set
+        {
+            if (_normalizeHint == value)
+                return;
+            _normalizeHint = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>選択中クリップのノーマライズ情報を裏で測り、NormalizeHint を更新する。選択が変わった場合は古い結果を捨てる。ピーク解析はキャッシュされるため、2回目以降はすぐ終わる。</summary>
+    private async Task RefreshNormalizeHintAsync()
+    {
+        var clip = SelectedClip;
+        if (clip is null || !clip.NormalizeAudioEnabled || string.IsNullOrEmpty(clip.SourcePath))
+        {
+            NormalizeHint = string.Empty;
+            return;
+        }
+        var clipId = clip.Id;
+        var targetDb = AudioNormalizer.ClampTargetDb(clip.NormalizeTargetDb);
+        NormalizeHint = "ピークを解析中…";
+        AudioPeakResult peak;
+        try
+        {
+            peak = await _peakProvider
+                .GetPeakAsync(clip.SourcePath, clip.InPointSeconds, clip.DurationSeconds)
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            if (SelectedClip?.Id == clipId)
+                NormalizeHint = $"ピークを測れませんでした：{ex.Message}（元の音量で再生・書き出しします）";
+            return;
+        }
+        if (SelectedClip?.Id != clipId)
+            return; // 選択が変わったので古い結果は捨てる。
+        if (!peak.Available)
+        {
+            NormalizeHint = $"ピークを測れませんでした：{peak.FailureReason}（元の音量で再生・書き出しします）";
+            return;
+        }
+        var gainDb = AudioNormalizer.ComputeGainDb(peak.PeakLinear, targetDb);
+        var peakDb = AudioNormalizer.PeakToDb(peak.PeakLinear);
+        var peakText = double.IsNegativeInfinity(peakDb) ? "無音" : $"{peakDb:F1} dBFS";
+        var sign = gainDb >= 0 ? "+" : string.Empty;
+        // 上限（+40 dB）で止まった場合は、目標に届かない旨を明示する。
+        var capped = !double.IsNegativeInfinity(peakDb)
+            && targetDb - peakDb > AudioNormalizer.MaxGainDb + 1e-9;
+        NormalizeHint = capped
+            ? $"ピーク {peakText} → ゲイン {sign}{gainDb:F1} dB（上限 +40 dB で止めています。目標 {targetDb:F1} dBFS には届きません）"
+            : $"ピーク {peakText} → ゲイン {sign}{gainDb:F1} dB（目標 {targetDb:F1} dBFS）";
+    }
+
+    /// <summary>選択中クリップの逆再生（映像・音声とも逆向きに再生する）。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。切り替えるとプレビューが描き直される。</summary>
+    public bool SelectedClipIsReversed
+    {
+        get => SelectedClip?.IsReversed ?? false;
+        set
+        {
+            if (SelectedClip is null || SelectedClip.IsReversed == value)
+                return;
+            BeginEdit();
+            SelectedClip.IsReversed = value;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
         }
     }
 
@@ -2084,7 +2204,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             _ = EnsureAnalysisAsync(clip);
             return null;
         }
-        var sourceTime = clip.InPointSeconds + (PlayheadSeconds - clip.StartSeconds);
+        var sourceTime = clip.GetSourceTimeSeconds(PlayheadSeconds);
         return _bandProvider.GetSpectrumBands(clip.Id, sourceTime, SpectrumBandCount, SpectrumLowHz, SpectrumHighHz);
     }
 
@@ -2102,7 +2222,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             _ = EnsureAnalysisAsync(clip);
             return null;
         }
-        var sourceTime = clip.InPointSeconds + (PlayheadSeconds - clip.StartSeconds);
+        var sourceTime = clip.GetSourceTimeSeconds(PlayheadSeconds);
         return _bandProvider.GetStereoWindow(clip.Id, sourceTime, LissajousWindowSeconds);
     }
 
@@ -2236,13 +2356,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         await _timelineExporter.ExportAsync(Project, outputPath, settings, progress, ct).ConfigureAwait(true);
     }
 
-    /// <summary>単一クリップの区間書き出し（最初の経路の確認用）。</summary>
+    /// <summary>単一クリップの区間書き出し（最初の経路の確認用）。逆再生クリップは逆向きに書き出す。</summary>
     public Task ExportSingleClipAsync(
         Clip clip, string outputPath, ExportSettings settings,
         IProgress<double>? progress = null, CancellationToken ct = default)
         => _exportService.ExportSingleClipAsync(
             clip.SourcePath, clip.InPointSeconds, clip.DurationSeconds,
-            outputPath, settings, progress, ct);
+            outputPath, settings, progress, ct, clip.IsReversed);
 
     public Task<SKBitmap> RenderPreviewAsync(
         double timeSeconds, (int Width, int Height)? maxDisplaySize = null,
@@ -2277,22 +2397,54 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         PlayheadSeconds = next;
     }
 
-    /// <summary>再生ヘッド位置でアクティブな音声つきクリップの音を全て鳴らす。無ければ止める。</summary>
-    public void StartAudioAtPlayhead()
+    /// <summary>再生ヘッド位置でアクティブな音声つきクリップの音を全て鳴らす。無ければ止める。逆再生クリップは逆向きに鳴らす。ノーマライズが有効なクリップはピークから計算したゲインを掛ける（書き出しと同じ計算・同じ提供口）。ピーク解析が終わるまで再生開始が少し遅れることがある（2回目以降はキャッシュ済み）。解析に失敗したクリップは元の音量で鳴らす。</summary>
+    public async void StartAudioAtPlayhead()
     {
-        var sources = Project.Tracks
+        var generation = ++_audioPlayGeneration;
+        var actives = Project.Tracks
             .SelectMany(t => t.Clips)
             .Where(c => c.IsActiveAt(PlayheadSeconds) && !string.IsNullOrEmpty(c.SourcePath))
             .Select(c => (Clip: c, Media: MediaItems.FirstOrDefault(m => m.SourcePath == c.SourcePath)))
             .Where(x => x.Media is not null && x.Media.Info.HasAudio)
-            .Select(x => (x.Media!.SourcePath, x.Clip.InPointSeconds + (PlayheadSeconds - x.Clip.StartSeconds)))
             .ToList();
 
-        if (sources.Count == 0)
+        if (actives.Count == 0)
         {
             _audioPlayer.Stop();
             return;
         }
+
+        // ノーマライズのゲインを全クリップ分まとめて測る（並列）。測れなければ等倍。
+        var gains = await Task.WhenAll(actives.Select(async x =>
+        {
+            if (!x.Clip.NormalizeAudioEnabled)
+                return 1.0;
+            try
+            {
+                var peak = await _peakProvider.GetPeakAsync(
+                    x.Clip.SourcePath, x.Clip.InPointSeconds, x.Clip.DurationSeconds)
+                    .ConfigureAwait(false);
+                return peak.Available
+                    ? AudioNormalizer.ComputeGain(peak.PeakLinear, x.Clip.NormalizeTargetDb)
+                    : 1.0;
+            }
+            catch
+            {
+                return 1.0; // 解析に失敗しても再生は止めない（元の音量で鳴らす）。
+            }
+        })).ConfigureAwait(true);
+
+        // 解析を待っている間に停止されたり鳴らし直されたりしたら、古い再生は捨てる。
+        if (!IsPlaying || generation != _audioPlayGeneration)
+            return;
+
+        var sources = actives.Select((x, i) => new AudioPreviewSource(
+            x.Media!.SourcePath,
+            x.Clip.GetSourceTimeSeconds(PlayheadSeconds),
+            x.Clip.IsReversed,
+            x.Clip.InPointSeconds,
+            x.Clip.InPointSeconds + x.Clip.DurationSeconds,
+            gains[i])).ToList();
 
         try
         {

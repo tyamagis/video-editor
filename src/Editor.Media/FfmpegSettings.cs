@@ -4,12 +4,13 @@
 // 実行ファイルの場所は設定で変えられる。
 
 using System.IO;
+using Editor.Core;
 using FFMpegCore;
 
 namespace Editor.Media;
 
 /// <summary>ffmpeg / ffprobe の所在設定。既定は PATH 頼み。</summary>
-public sealed class FfmpegSettings
+public sealed class FfmpegSettings : IFfmpegConfiguration
 {
     public string FfmpegExePath { get; set; } = "ffmpeg";
     public string FfprobeExePath { get; set; } = "ffprobe";

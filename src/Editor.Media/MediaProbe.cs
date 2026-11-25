@@ -4,24 +4,13 @@
 
 using System.IO;
 using System.Text.Json;
+using Editor.Core;
 using FFMpegCore;
 
 namespace Editor.Media;
 
-/// <summary>プローブ結果。素材の基本情報。</summary>
-public sealed record MediaInfo(
-    string Path,
-    TimeSpan Duration,
-    int Width,
-    int Height,
-    double FrameRate,
-    bool HasVideo,
-    bool HasAudio,
-    string? VideoCodec,
-    string? AudioCodec);
-
 /// <summary>動画・音声ファイルの情報を調べる。</summary>
-public sealed class MediaProbe
+public sealed class MediaProbe : IMediaProbe
 {
     private readonly FfmpegSettings _settings;
 

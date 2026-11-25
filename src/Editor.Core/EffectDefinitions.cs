@@ -2,13 +2,13 @@
 // 表示名・ラベル・既定値・範囲・ヘルプ説明はここだけが持つ。新しい種類を追加するときは
 // このテーブルに1行足すだけで、範囲の丸め（ClipEffect.Clamp*）・既定値・
 // 表示名・ラベル・ヘルプ説明が揃い、XAML の選択肢一覧と説明文もこのテーブルから
-// 自動生成される（ComboBox の ItemsSource と HelpText）。描画本体（FrameRenderer）のみ
+// 自動生成される（ComboBox の ItemsSource と HelpText）。描画本体（ClipCompositor）のみ
 // 別途追加が必要なため、追加時のチェックリストは設計プランの監査まとめを参照。
 // EffectKind の enum の順序・数値は .veproj 互換のため変えないこと。
 // （数値は旧実装の switch から1文字も変えずに移したもの。）
 // 第3パラメータ（Third*）は Amount / Radius だけでは足りない種類用。
-// 今はトーンカーブの中間調だけが使う。使う種類は ThirdMin / ThirdMax を
-// 両方指定し、ラベル・既定値・範囲をここに書く。
+// トーンカーブの中間調・レベル補正のガンマ・スプリットトーンの着色の強さが使う。
+// 使う種類は ThirdMin / ThirdMax を両方指定し、ラベル・既定値・範囲をここに書く。
 // AppliesToText はテキストクリップに意味があるか。キー系（背景抜き）は
 // テキストの透明背景には意味が無く文字色を消すだけなので false にする。
 // false の種類はテキストには付けられず（UIで断る）、描画でも無視される。
@@ -72,6 +72,27 @@ public static class EffectDefinitions
         new(EffectKind.MotionBlur, "モーションブラー", "長さ", "方向（度）", 16, 0, 0, 64, 0, 360, "長さ(px)・方向(度)"),
         new(EffectKind.LuminanceKey, "輝度キー", "しきい値", "なめらかさ", 0.5, 0.15, 0, 1, 0, 1, "しきい値(0-1)・なめらかさ", AppliesToText: false),
         new(EffectKind.ToneCurve, "トーンカーブ", "シャドウ", "ハイライト", 0, 0, -1, 1, -1, 1, "シャドウ・中間調・ハイライト(-1〜1)", "中間調", 0, -1, 1),
+        new(EffectKind.Bloom, "ブルーム", "強さ", "ぼかし半径", 0.5, 16, 0, 1, 1, 100, "強さ(0-1)・ぼかし半径(px)"),
+        new(EffectKind.LightLeak, "ライトリーク", "強さ", "広がり", 0.5, 1.0, 0, 1, 0.5, 2, "強さ(0-1)・広がり"),
+        new(EffectKind.PixelSort, "ピクセルソート", "しきい値", "最大ソート長", 0.5, 64, 0, 1, 8, 256, "しきい値(0-1)・最大ソート長(px)"),
+        new(EffectKind.Wave, "ウェーブ", "振幅", "波長", 20, 240, 0, 100, 20, 1000, "振幅(px)・波長(px)"),
+        new(EffectKind.Mirror, "ミラー", "位置", "方式", 0.5, 1, 0, 1, 0, 2, "位置(0-1)・方式(0=反転・1=左右分割・2=上下分割)"),
+        new(EffectKind.Twirl, "トゥワール", "ねじれ角", "影響半径", 180, 0.6, -360, 360, 0.2, 1, "ねじれ角(度)・影響半径"),
+        new(EffectKind.Displacement, "ディスプレイスメント", "強さ", "パターン倍率", 30, 1, 0, 100, 0.5, 4, "強さ(px)・パターン倍率"),
+        new(EffectKind.Bulge, "バルジ", "膨らみ", "影響半径", 0.5, 0.6, 0, 1, 0.2, 1, "膨らみ(0-1)・影響半径"),
+        new(EffectKind.WaterRipple, "ウォーターリップル", "振幅", "波長", 8, 40, 0, 50, 10, 200, "振幅(px)・波長(px)"),
+        new(EffectKind.ColorTemp, "色温度", "温度", string.Empty, 0, 0, -1, 1, null, null, "温度(-1=冷色・+1=暖色)"),
+        new(EffectKind.Levels, "レベル補正", "黒点", "白点", 0, 1, 0, 0.5, 0.5, 1, "黒点・白点・ガンマ", "ガンマ", 1, 0.2, 5),
+        new(EffectKind.SplitTone, "スプリットトーン", "ハイライト色相", "シャドウ色相", 45, 220, 0, 360, 0, 360, "ハイライト色相・シャドウ色相・強さ", "強さ", 0.5, 0, 1),
+        new(EffectKind.GradientMap, "グラデーションマップ", "暗部色相", "明部色相", 220, 45, 0, 360, 0, 360, "暗部色相・明部色相"),
+        new(EffectKind.OldFilm, "オールドフィルム", "強さ", "傷の密度", 0.5, 0.5, 0, 1, 0, 1, "強さ(0-1)・傷の密度(0-1)"),
+        new(EffectKind.Letterbox, "レターボックス", "帯の高さ", string.Empty, 0.12, 0, 0, 0.25, null, null, "帯の高さ(画面高さに対する割合)"),
+        new(EffectKind.Scanlines, "スキャンライン", "線の濃さ", "線の間隔", 0.5, 3, 0, 1, 2, 8, "線の濃さ(0-1)・間隔(px)"),
+        new(EffectKind.Halftone, "ハーフトーン", "ドットサイズ", "角度", 6, 45, 2, 16, 0, 90, "ドットサイズ(px)・角度(度)"),
+        new(EffectKind.EdgeDetect, "エッジ検出", "強さ", "しきい値", 0.8, 0.15, 0, 1, 0, 1, "強さ(0-1)・しきい値(0-1)"),
+        new(EffectKind.Solarize, "ソラリゼーション", "しきい値", string.Empty, 0.5, 0, 0, 1, null, null, "しきい値(0-1)"),
+        new(EffectKind.Kuwahara, "油絵風", "カーネル半径", "強さ", 3, 1, 1, 8, 0, 1, "カーネル半径(px)・強さ(0-1)"),
+        new(EffectKind.TiltShift, "ティルトシフト", "ぼかし強さ", "合焦帯の幅", 0.5, 0.3, 0, 1, 0.1, 0.8, "ぼかし強さ(0-1)・合焦帯の幅"),
     };
 
     /// <summary>全種類の定義。XAML のエフェクト選択 ComboBox の ItemsSource に使う（表示順＝この配列の順＝EffectKind の順）。</summary>

@@ -8,7 +8,6 @@
 // （既定は EaseOut のため、既定のままでは t=0.5 の不透明度は 0.75 になる）。
 
 using Editor.Core;
-using Editor.Media;
 using Editor.Render;
 using SkiaSharp;
 using Xunit;

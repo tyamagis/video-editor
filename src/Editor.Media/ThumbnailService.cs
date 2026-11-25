@@ -4,14 +4,9 @@
 // 連続再生時の再抽出を避けるため、直近1フレームだけキャッシュする。
 
 using System.IO;
+using Editor.Core;
 
 namespace Editor.Media;
-
-/// <summary>指定時刻の映像フレームを PNG バイト列で取得する口。</summary>
-public interface IVideoFrameSource
-{
-    Task<byte[]?> GetFramePngAsync(string sourcePath, double timeSeconds, int maxWidth, CancellationToken ct = default);
-}
 
 /// <summary>ffmpeg の単フレーム切り出しによるフレーム取得。</summary>
 public sealed class ThumbnailService : IVideoFrameSource
@@ -19,7 +14,10 @@ public sealed class ThumbnailService : IVideoFrameSource
     private readonly FfmpegSettings _settings;
 
     // 直近1件のキャッシュ（キー：素材パス＋時刻＋幅）。
+    // 素材が差し替えられていないか、身元（パス＋サイズ＋更新日時）でも照合する。
+    // 以前はキーだけで引いていたため、差し替え後の古いフレームを返すことがあった。
     private (string Path, double TimeSeconds, int MaxWidth)? _lastKey;
+    private SourceIdentity? _lastIdentity;
     private byte[]? _lastPng;
 
     public ThumbnailService(FfmpegSettings settings)
@@ -41,8 +39,13 @@ public sealed class ThumbnailService : IVideoFrameSource
     public async Task<byte[]?> GetFramePngAsync(
         string sourcePath, double timeSeconds, int maxWidth, CancellationToken ct = default)
     {
+        // ファイルの現在の身元を取る。取れなければ（削除済みなど）キャッシュは使わず、
+        // そのまま抽出を試みる（従来通り、失敗すれば null が返る）。
         var key = (sourcePath, Math.Round(timeSeconds, 3), maxWidth);
-        if (_lastKey == key && _lastPng is not null)
+        if (_lastKey == key && _lastPng is not null
+            && _lastIdentity is { } lastIdentity
+            && SourceIdentity.TryCapture(sourcePath, out var current)
+            && lastIdentity.Matches(current))
             return _lastPng;
 
         var tempPath = Path.Combine(Path.GetTempPath(), $"ve-frame-{Guid.NewGuid():N}.png");
@@ -55,6 +58,9 @@ public sealed class ThumbnailService : IVideoFrameSource
 
             var bytes = await File.ReadAllBytesAsync(tempPath, ct).ConfigureAwait(false);
             _lastKey = key;
+            // 抽出した時点の身元を保存する。照合時の身元と抽出時の身元が
+            // 違えば（抽出中に差し替えられた場合）、次回は再抽出になる。
+            _lastIdentity = SourceIdentity.TryCapture(sourcePath, out var stored) ? stored : null;
             _lastPng = bytes;
             return bytes;
         }

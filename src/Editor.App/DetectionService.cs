@@ -76,6 +76,9 @@ public sealed class DetectionService : INotifyPropertyChanged
     /// <summary>保留中の無音検出時のクリップの長さ（秒）。検出後に長さが変わっていたら適用しない。</summary>
     private double _pendingSilenceDuration;
 
+    /// <summary>保留中の無音検出時の逆再生フラグ。検出後に切り替えていたら適用しない。</summary>
+    private bool _pendingSilenceReversed;
+
     /// <summary>無音検出のしきい値（dBFS）。既定 -40dB。</summary>
     private double _silenceThresholdDb = -40;
 
@@ -212,14 +215,22 @@ public sealed class DetectionService : INotifyPropertyChanged
         _host.BeginEdit();
 
         // 素材内時刻をタイムライン時刻に変換する。
+        // 逆再生なら、素材の後ろの拍がタイムラインの手前に来る（素材時刻 t は
+        // Start + Duration - (t - InPoint) になる）。
         var shift = clip.StartSeconds - clip.InPointSeconds;
-        var rawOffset = clip.StartSeconds + (result.OffsetSeconds - clip.InPointSeconds);
+        var rawOffset = clip.IsReversed
+            ? result.BeatTimes.Count > 0
+                ? clip.StartSeconds + clip.DurationSeconds - (result.BeatTimes.Max() - clip.InPointSeconds)
+                : clip.StartSeconds + clip.DurationSeconds - (result.OffsetSeconds - clip.InPointSeconds)
+            : clip.StartSeconds + (result.OffsetSeconds - clip.InPointSeconds);
         // 拍オフセットは 0〜1周期の範囲に正規化する（負の場合は周期を足して合わせる）。
         // 0 で丸めるだけだと、イン点が大きいときに拍グリッドと検出拍がずれてしまう。
         var period = 60.0 / result.Bpm.Value;
         var offset = rawOffset - Math.Floor(rawOffset / period) * period;
         var beatTimes = result.BeatTimes
-            .Select(t => t + shift)
+            .Select(t => clip.IsReversed
+                ? clip.StartSeconds + clip.DurationSeconds - (t - clip.InPointSeconds)
+                : t + shift)
             .Where(t => t >= clip.StartSeconds - 1e-6 && t <= clip.EndSeconds + 1e-6)
             .Select(t => Math.Clamp(t, clip.StartSeconds, clip.EndSeconds))
             .ToList();
@@ -415,8 +426,10 @@ public sealed class DetectionService : INotifyPropertyChanged
             return;
         }
         // 検出後にクリップをトリミングしていたら、検出区間とクリップの対応がずれるため適用しない。
+        // 逆再生の切り替えも同じ（検出区間のタイムラインへの写し方が変わるため）。
         if (Math.Abs(clip.InPointSeconds - _pendingSilenceInPoint) > 1e-6
-            || Math.Abs(clip.DurationSeconds - _pendingSilenceDuration) > 1e-6)
+            || Math.Abs(clip.DurationSeconds - _pendingSilenceDuration) > 1e-6
+            || clip.IsReversed != _pendingSilenceReversed)
         {
             SetPendingSilence(null, null);
             _host.SetStatusMessage("検出後にクリップが変更されたため、適用できませんでした。もう一度検出してください。");
@@ -436,10 +449,17 @@ public sealed class DetectionService : INotifyPropertyChanged
         }
 
         // 検出した区間（イン点からの相対秒）をタイムライン時刻に変換する。
-        var segments = result.Segments
-            .Select(s => (StartSeconds: clip.StartSeconds + s.StartSeconds,
-                          EndSeconds: clip.StartSeconds + s.EndSeconds))
-            .ToList();
+        // 逆再生なら、素材の後ろの区間がタイムラインの手前に来る
+        // （区間 [a, b] は [Duration-b, Duration-a] になる）。
+        var segments = clip.IsReversed
+            ? result.Segments
+                .Select(s => (StartSeconds: clip.StartSeconds + clip.DurationSeconds - s.EndSeconds,
+                              EndSeconds: clip.StartSeconds + clip.DurationSeconds - s.StartSeconds))
+                .ToList()
+            : result.Segments
+                .Select(s => (StartSeconds: clip.StartSeconds + s.StartSeconds,
+                              EndSeconds: clip.StartSeconds + s.EndSeconds))
+                .ToList();
 
         _host.BeginEdit();
         var removed = TimelineEditor.CutSilenceRanges(track, clip, segments);
@@ -459,6 +479,7 @@ public sealed class DetectionService : INotifyPropertyChanged
         // 検出時のクリップの形を記録する（適用時に変わっていたら適用しない）。
         _pendingSilenceInPoint = clip?.InPointSeconds ?? 0;
         _pendingSilenceDuration = clip?.DurationSeconds ?? 0;
+        _pendingSilenceReversed = clip?.IsReversed ?? false;
         OnPropertyChanged(nameof(HasPendingSilence));
         OnPropertyChanged(nameof(SilenceDetectionText));
     }

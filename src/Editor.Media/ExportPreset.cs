@@ -2,6 +2,8 @@
 // プロジェクトとは別に %APPDATA%\VideoEditor\export-presets.json で管理する（ExportPresetStore）。
 // 既定プリセットはアプリに内蔵し、初回起動時（ファイルが無い・壊れている場合を含む）に使える。
 
+using Editor.Core;
+
 namespace Editor.Media;
 
 /// <summary>名前付きの書き出し設定。IsBuiltIn が true のものは既定プリセットで、削除・上書きできない。</summary>

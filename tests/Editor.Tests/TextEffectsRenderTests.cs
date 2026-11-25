@@ -5,7 +5,6 @@
 // 「効いている／壊れていない／位置・大きさが変わらない」の確認が目的。
 
 using Editor.Core;
-using Editor.Media;
 using Editor.Render;
 using SkiaSharp;
 using Xunit;

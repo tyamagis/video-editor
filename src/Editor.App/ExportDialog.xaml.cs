@@ -7,6 +7,7 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using Editor.Core;
 using Editor.Media;
 
 namespace Editor.App;

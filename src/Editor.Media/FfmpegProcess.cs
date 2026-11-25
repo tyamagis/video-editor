@@ -3,6 +3,7 @@
 // 引数（フィルタやエンコード設定）がコードから見えるようにする。
 
 using System.Diagnostics;
+using Editor.Core;
 
 namespace Editor.Media;
 
@@ -16,19 +17,11 @@ public static class FfmpegProcess
     /// ffmpeg / ffprobe 起動時の共通設定（ウィンドウなし・入出力リダイレクト）。
     /// 長期プロセス（常駐ストリーム）と短期プロセスで設定を揃えるための1か所。
     /// 標準入力へ送るプロセス（タイムライン書き出し）は redirectStandardInput: true を指定する。
+    /// 実体は Core の ProcessStartInfoFactory に移った。ここは互換のための委譲ラッパー。
     /// </summary>
     public static ProcessStartInfo CreateStartInfo(
         string exePath, string arguments, bool redirectStandardInput = false)
-        => new()
-        {
-            FileName = exePath,
-            Arguments = arguments,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardInput = redirectStandardInput,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
+        => ProcessStartInfoFactory.CreateStartInfo(exePath, arguments, redirectStandardInput);
 
     public static async Task<ProcessResult> RunAsync(
         string exePath, string arguments, CancellationToken ct = default)

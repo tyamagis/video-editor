@@ -8,13 +8,19 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- テスト（Editor.Tests）からの internal 参照許可。
+         以前は NewEffects*.cs 4ファイルに分散していた [assembly: InternalsVisibleTo] を
+         ここに集約（重複すると CS0579）。 -->
+    <InternalsVisibleTo Include="Editor.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- プレビュー・書き出し描画：SkiaSharp（設計プラン 3章） -->
     <PackageReference Include="SkiaSharp" Version="2.88.9" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Editor.Core\Editor.Core.csproj" />
-    <ProjectReference Include="..\Editor.Media\Editor.Media.csproj" />
   </ItemGroup>
 
 </Project>

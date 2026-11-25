@@ -5,45 +5,9 @@
 // フレームを順に描いて ffmpeg にパイプする（同じ ExportSettings を使う）。
 
 using System.IO;
+using Editor.Core;
 
 namespace Editor.Media;
-
-/// <summary>書き出し設定。解像度とフレームレート、画質の組み合わせ。</summary>
-public sealed record ExportSettings(
-    int Width = 1920,
-    int Height = 1080,
-    int FrameRate = 30,
-    int Crf = 20,
-    string Preset = "medium",
-    int AudioBitrateKbps = 192)
-{
-    public static ExportSettings Hd30 { get; } = new(1920, 1080, 30);
-    public static ExportSettings Hd60 { get; } = new(1920, 1080, 60);
-    public static ExportSettings Uhd30 { get; } = new(3840, 2160, 30);
-    public static ExportSettings Uhd60 { get; } = new(3840, 2160, 60);
-
-    /// <summary>x264 のエンコーダープリセット一覧（速い→遅い・高画質の順）。</summary>
-    public static IReadOnlyList<string> EncoderPresets { get; } =
-    [
-        "ultrafast", "superfast", "veryfast", "faster", "fast",
-        "medium", "slow", "slower", "veryslow", "placebo"
-    ];
-
-    public void Validate()
-    {
-        if (Width <= 0 || Height <= 0)
-            throw new ArgumentOutOfRangeException(nameof(Width), "解像度は正の値にしてください。");
-        if (FrameRate <= 0)
-            throw new ArgumentOutOfRangeException(nameof(FrameRate), "フレームレートは正の値にしてください。");
-        if (Crf is < 0 or > 51)
-            throw new ArgumentOutOfRangeException(nameof(Crf), "CRFは0〜51の範囲にしてください。");
-        if (!EncoderPresets.Contains(Preset, StringComparer.OrdinalIgnoreCase))
-            throw new ArgumentException(
-                $"エンコーダープリセットは {string.Join(" / ", EncoderPresets)} のいずれかにしてください。", nameof(Preset));
-        if (AudioBitrateKbps is < 16 or > 512)
-            throw new ArgumentOutOfRangeException(nameof(AudioBitrateKbps), "音声ビットレートは16〜512 kbpsの範囲にしてください。");
-    }
-}
 
 /// <summary>単一素材の区間を MP4 に書き出す。</summary>
 public sealed class ExportService
@@ -58,6 +22,8 @@ public sealed class ExportService
     /// <summary>
     /// 素材の inPoint から duration 秒分を切り出して MP4 化する。
     /// タイムライン編集の結果を1本の動画として確認する、最初の経路。
+    /// reverse が true のとき、切り出した区間を映像・音声とも逆向きにする
+    /// （-vf reverse / -af areverse。音声の無い素材でも -af areverse は無視され、失敗しない）。
     /// </summary>
     public async Task ExportSingleClipAsync(
         string sourcePath,
@@ -66,13 +32,16 @@ public sealed class ExportService
         string outputPath,
         ExportSettings settings,
         IProgress<double>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool reverse = false)
     {
         if (!File.Exists(sourcePath))
             throw new FileNotFoundException("素材ファイルが見つかりません。", sourcePath);
         settings.Validate();
 
-        var args = $"-y -ss {inPointSeconds:F3} -i \"{sourcePath}\" -t {durationSeconds:F3} " +
+        var reverseFilters = reverse ? " -vf reverse -af areverse" : string.Empty;
+        var args = $"-y -ss {inPointSeconds:F3} -i \"{sourcePath}\" -t {durationSeconds:F3}" +
+                   $"{reverseFilters} " +
                    $"-c:v libx264 -preset {settings.Preset} -crf {settings.Crf} " +
                    $"-pix_fmt yuv420p -r {settings.FrameRate} -s {settings.Width}x{settings.Height} " +
                    $"-c:a aac -b:a {settings.AudioBitrateKbps}k -movflags +faststart \"{outputPath}\"";

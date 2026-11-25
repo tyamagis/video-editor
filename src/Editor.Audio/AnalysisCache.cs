@@ -8,8 +8,6 @@
 // キャッシュが壊れている・古い・条件が違う場合は無視して再解析する（例外は出さない）。
 
 using System.IO;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Editor.Core;
 
@@ -43,24 +41,15 @@ public static class AudioAnalysisCache
     /// <summary>キャッシュ形式の版。解析の仕様が変わったら上げると、古いキャッシュは無視される。</summary>
     private const int CacheVersion = 1;
 
-    /// <summary>プロジェクトのキャッシュフォルダ。「MyProject.veproj」→ 同じフォルダの「MyProject.cache」。</summary>
+    /// <summary>プロジェクトのキャッシュフォルダ。命名は <see cref="CacheFileNaming"/> に委譲する。</summary>
     public static string GetCacheDirectory(string projectPath)
-    {
-        var directory = Path.GetDirectoryName(projectPath) ?? string.Empty;
-        return Path.Combine(directory, Path.GetFileNameWithoutExtension(projectPath) + ".cache");
-    }
+        => CacheFileNaming.GetCacheDirectory(projectPath);
 
     /// <summary>
-    /// 素材1件分のキャッシュファイルの基名（拡張子なし）。
-    /// 素材のフルパス（小文字化）の SHA-256 を16進数にしたもので、パスに使えない文字や
-    /// 長すぎるパスを避ける。同じ素材でもプロジェクトが違えばフォルダが違うため衝突しない。
+    /// 素材1件分のキャッシュファイルの基名（拡張子なし）。命名は <see cref="CacheFileNaming"/> に委譲する。
     /// </summary>
     public static string GetCacheFileBase(string cacheDirectory, string sourcePath)
-    {
-        var fullPath = Path.GetFullPath(sourcePath).ToLowerInvariant();
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(fullPath));
-        return Path.Combine(cacheDirectory, Convert.ToHexString(hash).ToLowerInvariant());
-    }
+        => CacheFileNaming.GetCacheFileBase(cacheDirectory, sourcePath);
 
     /// <summary>
     /// キャッシュを読み込む。無ければ null。壊れている・古い・条件が違う場合も null
@@ -74,7 +63,7 @@ public static class AudioAnalysisCache
             if (!File.Exists(sourcePath))
                 return null;
             var info = new FileInfo(sourcePath);
-            var fileBase = GetCacheFileBase(cacheDirectory, sourcePath);
+            var fileBase = CacheFileNaming.GetCacheFileBase(cacheDirectory, sourcePath);
             var jsonPath = fileBase + ".audio.json";
             var binPath = fileBase + ".audio.bin";
             if (!File.Exists(jsonPath) || !File.Exists(binPath))
@@ -86,15 +75,11 @@ public static class AudioAnalysisCache
                 return null;
 
             // 身元・解析条件の照合。1つでも合わなければ古いキャッシュとして無視する。
+            // 身元の照合は SourceIdentity に委譲する（従来と同じ：フルパス＋サイズ＋更新日時）。
             if (header.Version != CacheVersion)
                 return null;
-            if (!string.Equals(
-                    Path.GetFullPath(header.SourcePath),
-                    Path.GetFullPath(sourcePath),
-                    StringComparison.OrdinalIgnoreCase))
-                return null;
-            if (header.Length != info.Length
-                || header.LastWriteTimeUtcTicks != info.LastWriteTimeUtc.Ticks)
+            if (!new SourceIdentity(header.SourcePath, header.Length, header.LastWriteTimeUtcTicks)
+                    .Matches(info))
                 return null; // 素材が差し替え・上書きされた。
             if (Math.Abs(header.FrameRate - frameRate) > 1e-9)
                 return null; // フレームレートが違う解析結果は使い回せない。
@@ -157,14 +142,15 @@ public static class AudioAnalysisCache
     public static void Save(CachedAudioAnalysis data, string cacheDirectory)
     {
         Directory.CreateDirectory(cacheDirectory);
-        var fileBase = GetCacheFileBase(cacheDirectory, data.SourcePath);
         var binCount = data.FftSize / 2;
+        var identity = new SourceIdentity(
+            Path.GetFullPath(data.SourcePath), data.Length, data.LastWriteTimeUtc.Ticks);
         var header = new CacheHeader
         {
             Version = CacheVersion,
-            SourcePath = Path.GetFullPath(data.SourcePath),
-            Length = data.Length,
-            LastWriteTimeUtcTicks = data.LastWriteTimeUtc.Ticks,
+            SourcePath = identity.FullPath,
+            Length = identity.Length,
+            LastWriteTimeUtcTicks = identity.LastWriteTimeUtcTicks,
             SampleRate = data.SampleRate,
             FrameRate = data.FrameRate,
             DurationSeconds = data.DurationSeconds,
@@ -194,8 +180,10 @@ public static class AudioAnalysisCache
         offset += data.StereoLeft.Length * 4;
         Buffer.BlockCopy(data.StereoRight, 0, bytes, offset, data.StereoRight.Length * 4);
 
-        AtomicFile.WriteAllBytes(fileBase + ".audio.bin", bytes);
-        AtomicFile.WriteAllText(fileBase + ".audio.json",
+        AtomicFile.WriteAllBytes(
+            CacheFileNaming.GetCacheFilePath(cacheDirectory, data.SourcePath, ".audio.bin"), bytes);
+        AtomicFile.WriteAllText(
+            CacheFileNaming.GetCacheFilePath(cacheDirectory, data.SourcePath, ".audio.json"),
             JsonSerializer.Serialize(header, JsonDefaults.Indented));
     }
 

@@ -65,7 +65,10 @@ public sealed class LyricsImportTests
         var phrases = LyricsFileReader.ReadPhrases(path, DefaultOptions());
 
         Assert.Equal(new[] { "あいうえお", "かきくけこ" }, phrases);
-        Assert.DoesNotContain("\uFEFF", phrases[0]);
+        // xUnit 2.9.2 の Assert.DoesNotContain(string, string) は、含んでいない
+        // "\uFEFF" に対しても DoesNotContainException を投げるため使わない
+        // （実測済み）。代わりに素の string.Contains で確認する。
+        Assert.False(phrases[0].Contains('\uFEFF'));
     }
 
     /// <summary>Shift_JISの歌詞ファイルが読めること（UTF-8として読めないバイト列はShift_JISで読み直す）。</summary>
@@ -100,8 +103,11 @@ public sealed class LyricsImportTests
     public void ReadPhrases_UndecodableBytes_ThrowsLyricsImportException()
     {
         using var temp = new TempDirectory();
-        // 0xFF は UTF-8 でも Shift_JIS でも無効なバイト。
-        var path = WriteBytesFile(temp, "lyrics.txt", new byte[] { 0xFF });
+        // 0x81 は Shift_JIS の2バイト文字の先行バイトだが、後続の 0x20 は
+        // 後続バイトとして無効（UTF-8 としても無効）。
+        // なお単独の 0xFF は Shift_JIS では U+F8F3 にデコードされるため
+        // （実測済み）、「読めないバイト列」の例にはならない。
+        var path = WriteBytesFile(temp, "lyrics.txt", new byte[] { 0x81, 0x20 });
 
         var ex = Assert.Throws<LyricsImportException>(() =>
             LyricsFileReader.ReadPhrases(path, DefaultOptions()));
