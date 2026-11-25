@@ -50,6 +50,7 @@ public sealed class EffectRow : INotifyPropertyChanged
             OnPropertyChanged(nameof(MidtonesLabel));
             OnPropertyChanged(nameof(ShowMidtones));
             OnPropertyChanged(nameof(ShowKeyColor));
+            OnPropertyChanged(nameof(ShowLutFile));
             _owner.RefreshKeyframeRows();
             _owner.RefreshAudioBindingRows(); // 種類が変わるとバインドの対象に選べるエフェクト量も変わる。
             _owner.NotifyTimelineChanged();
@@ -133,6 +134,51 @@ public sealed class EffectRow : INotifyPropertyChanged
 
     /// <summary>キー色欄を表示するか（クロマキーだけ使う）。</summary>
     public bool ShowKeyColor => Effect.Kind == EffectKind.ChromaKey;
+
+    /// <summary>
+    /// LUTファイルのパス（LUT のときだけ使う）。離散的な変更なので代入前にスナップショットを取る。
+    /// パスが変われば状態表示（読み込み可否）も更新する。
+    /// </summary>
+    public string LutPath
+    {
+        get => Effect.LutPath;
+        set
+        {
+            if (Effect.LutPath == value)
+                return;
+            _owner.BeginEdit();
+            Effect.LutPath = value ?? string.Empty;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(LutFileName));
+            OnPropertyChanged(nameof(LutStatus));
+            _owner.NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>LUTファイル欄を表示するか（LUT のときだけ使う）。</summary>
+    public bool ShowLutFile => Effect.Kind == EffectKind.Lut;
+
+    /// <summary>LUTファイルの表示名（ファイル名のみ。未指定なら「未指定」）。</summary>
+    public string LutFileName
+        => string.IsNullOrWhiteSpace(Effect.LutPath) ? "未指定" : Path.GetFileName(Effect.LutPath);
+
+    /// <summary>
+    /// LUTファイルの状態表示。未指定・見つからない・読み込めない場合はその旨を示す
+    /// （描画側ではいずれも無効化され、元の色のままになる）。読み込める場合はサイズとタイトル。
+    /// </summary>
+    public string LutStatus
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(Effect.LutPath))
+                return "LUTファイルを選んでください（未指定では無効です）";
+            if (!File.Exists(Effect.LutPath))
+                return "⚠ ファイルが見つかりません（LUTは無効化されます）";
+            return CubeLut.TryLoad(Effect.LutPath, out var lut, out var error)
+                ? $"読み込みOK：{lut!.Size}×{lut.Size}×{lut.Size}" + (string.IsNullOrEmpty(lut.Title) ? string.Empty : $"「{lut.Title}」")
+                : $"⚠ 読み込めません（LUTは無効化されます）：{error}";
+        }
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

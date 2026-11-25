@@ -43,8 +43,8 @@ internal sealed class ClipCompositor
     /// 適用順：クロマキー・輝度キー（画素処理）→ モザイク・万華鏡・魚眼／色収差・
     /// ミラー・ウェーブ・トゥワール・ディスプレイスメント・バルジ・ウォーターリップル・
     /// ピクセルソート・ズームブラー・モーションブラー・色調系（色温度を含む）・
-    /// レベル補正・スプリットトーン・グラデーションマップ・ソラリゼーション・
-    /// エッジ検出・ハーフトーン・油絵風・VHSグリッチ・ブルーム・ライトリーク・
+    /// レベル補正・スプリットトーン・グラデーションマップ・LUT（色系チェーンの最後）・ソラリゼーション・
+    /// エッジ検出・ハーフトーン・油絵風・シャープ・エンボス・VHSグリッチ・ブルーム・ライトリーク・
     /// スキャンライン・オールドフィルム・ティルトシフト・ポスタリゼーション・
     /// ノイズ・フィルムグレイン・トーンカーブ・ビネット（作業用ビットマップへの前処理）・
     /// レターボックス → ドロップシャドウ → エコーの残像 →
@@ -167,6 +167,15 @@ internal sealed class ClipCompositor
             if (gradientMap is not null)
                 work = TrackIntermediate(work, NewEffectsColor.ApplyGradientMap(work, gradientMap), intermediates);
 
+            // LUT（3D LUT）：色系チェーンの最後にかける（LUT は最終グレードを
+            // 丸ごと表すのが普通で、レベル補正・色温度などの手調整を先に効かせてから
+            // LUT で仕上げる）。この後のソラリゼーション・エッジ・油絵風・シャープ等の
+            // 描画風／ディテール系は LUT の結果に対してかかる。
+            // ファイル未指定・見つからない・不正な場合は ApplyLut がコピーを返す（無効化）。
+            var lut = effects.FirstOrDefault(e => e.Kind == EffectKind.Lut);
+            if (lut is not null && lut.Amount > 0)
+                work = TrackIntermediate(work, LutEffect.ApplyLut(work, lut), intermediates);
+
             var solarize = effects.FirstOrDefault(e => e.Kind == EffectKind.Solarize);
             if (solarize is not null && solarize.Amount < 1)
                 work = TrackIntermediate(work, NewEffectsStyle.ApplySolarize(work, solarize), intermediates);
@@ -182,6 +191,16 @@ internal sealed class ClipCompositor
             var kuwahara = effects.FirstOrDefault(e => e.Kind == EffectKind.Kuwahara);
             if (kuwahara is not null && kuwahara.Radius > 0)
                 work = TrackIntermediate(work, NewEffectsStyle.ApplyKuwahara(work, kuwahara), intermediates);
+
+            // シャープ・エンボス：色調・描画風系の後にかける（油絵風などでなまった輪郭を
+            // シャープで締め直せる。エンボスはグレースケール化するため色系の後）。
+            var sharpen = effects.FirstOrDefault(e => e.Kind == EffectKind.Sharpen);
+            if (sharpen is not null && sharpen.Amount > 0)
+                work = TrackIntermediate(work, NewEffectsDetail.ApplySharpen(work, sharpen), intermediates);
+
+            var emboss = effects.FirstOrDefault(e => e.Kind == EffectKind.Emboss);
+            if (emboss is not null && emboss.Amount > 0)
+                work = TrackIntermediate(work, NewEffectsDetail.ApplyEmboss(work, emboss), intermediates);
 
             // VHSグリッチ：色調補正の後にかけるとテープ劣化らしくなる。
             var vhs = effects.FirstOrDefault(e => e.Kind == EffectKind.VhsGlitch);

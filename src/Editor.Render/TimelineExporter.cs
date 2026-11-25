@@ -27,11 +27,11 @@ public sealed class FrameSequenceExporter : ITimelineExporter
     private readonly AudioExportPlanner _audioPlanner;
 
     public FrameSequenceExporter(IFrameRenderer renderer, IFfmpegConfiguration ffmpeg, IMediaProbe probe,
-        IAudioPeakProvider? peakProvider = null)
+        IAudioPeakProvider? peakProvider = null, IAudioActivityProvider? activityProvider = null)
     {
         _renderer = renderer;
         _ffmpeg = ffmpeg;
-        _audioPlanner = new AudioExportPlanner(probe, peakProvider);
+        _audioPlanner = new AudioExportPlanner(probe, peakProvider, activityProvider);
     }
 
     public async Task ExportAsync(

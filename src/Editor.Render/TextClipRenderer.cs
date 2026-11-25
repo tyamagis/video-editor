@@ -146,6 +146,9 @@ internal static class TextClipRenderer
         EffectKind.Solarize => effect.Amount < 1,
         EffectKind.Kuwahara => effect.Radius > 0,
         EffectKind.TiltShift => effect.Amount > 0,
+        EffectKind.Sharpen => effect.Amount > 0,
+        EffectKind.Emboss => effect.Amount > 0,
+        EffectKind.Lut => effect.Amount > 0,
         // ChromaKey / LuminanceKey は HasActiveTextEffect で弾かれる。ここに来たら無効扱い。
         _ => false
     };

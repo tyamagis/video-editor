@@ -8,6 +8,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- テスト（Editor.Tests）からの internal 参照許可（Render と同じ扱い）。 -->
+    <InternalsVisibleTo Include="Editor.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- FFmpeg 呼び出し（設計プラン 3章）。プローブは FFMpegCore、
          書き出し・サムネイルは ffmpeg CLI を直接呼ぶ。 -->
     <PackageReference Include="FFMpegCore" Version="5.1.0" />

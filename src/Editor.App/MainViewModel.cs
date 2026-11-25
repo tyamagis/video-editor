@@ -27,6 +27,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
     private readonly FfmpegSettings _ffmpegSettings;
     private readonly AudioBandEnergyProvider _bandProvider;
     private readonly IAudioPeakProvider _peakProvider;
+    private readonly IAudioActivityProvider _activityProvider;
     private readonly Dispatcher _uiDispatcher;
 
     private readonly DispatcherTimer _playTimer;
@@ -34,6 +35,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
     private EditorProject _project = new();
     private Clip? _selectedClip;
     private MediaItem? _selectedMediaItem;
+
+    /// <summary>複数選択中のクリップ（Ctrl+クリックで切り替え。グループ化の対象）。主選択は SelectedClip が担う。</summary>
+    private readonly List<Clip> _multiSelectedClips = new();
 
     /// <summary>ノーマライズの状態についての説明文（測定したピークと適用されるゲインなど）。</summary>
     private string _normalizeHint = string.Empty;
@@ -85,7 +89,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         AudioBeatAnalyzer beatAnalyzer,
         AudioBandEnergyProvider bandProvider,
         SilenceDetector silenceDetector,
-        IAudioPeakProvider? peakProvider = null)
+        IAudioPeakProvider? peakProvider = null,
+        IAudioActivityProvider? activityProvider = null)
     {
         _mediaProbe = mediaProbe;
         _exportService = exportService;
@@ -95,6 +100,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         _ffmpegSettings = ffmpegSettings;
         _bandProvider = bandProvider;
         _peakProvider = peakProvider ?? new PeakAnalyzer();
+        _activityProvider = activityProvider ?? new AudioActivityAnalyzer();
         _uiDispatcher = Dispatcher.CurrentDispatcher;
 
         _playTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.0 / 30) };
@@ -117,6 +123,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         PlayPauseCommand = new RelayCommand(_ => IsPlaying = !IsPlaying);
         SplitCommand = new RelayCommand(_ => SplitAtPlayhead());
         DeleteClipCommand = new RelayCommand(_ => DeleteSelectedClip(), _ => SelectedClip is not null);
+        RippleDeleteClipCommand = new RelayCommand(_ => RippleDeleteSelectedClip(), _ => SelectedClip is not null);
+        GroupClipsCommand = new RelayCommand(_ => GroupSelectedClips());
+        UngroupClipCommand = new RelayCommand(_ => UngroupSelectedClip(), _ => SelectedClip is not null && ClipGroups.IsGrouped(SelectedClip));
         AddTextClipCommand = new RelayCommand(_ => AddTextClip("歌詞テロップ"));
 
         RefreshKeyframeParameterOptions();
@@ -134,6 +143,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
                 _analysisTasks.Clear(); // 解析タスクも新しいプロジェクトのクリップIdで取り直す。
             }
             _project = value;
+            _multiSelectedClips.Clear(); // 複数選択は旧プロジェクトのクリップ参照なので破棄する。
+            OnPropertyChanged(nameof(MultiSelectedClips));
             RefreshMarkerRows(); // プロジェクトが変わればマーカー一覧も作り直す（選択は引き継げなければ外れる）。
             OnPropertyChanged();
             OnPropertyChanged(nameof(Bpm));
@@ -161,6 +172,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             _selectedClip = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(HasSelectedClip));
+            OnPropertyChanged(nameof(IsSelectedClipGrouped));
             OnPropertyChanged(nameof(SelectedClipBrightness));
             OnPropertyChanged(nameof(SelectedClipContrast));
             OnPropertyChanged(nameof(SelectedClipTransitionKind));
@@ -178,7 +190,16 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             OnPropertyChanged(nameof(SelectedClipNormalizeAudioEnabled));
             OnPropertyChanged(nameof(SelectedClipNormalizeTargetDb));
             OnPropertyChanged(nameof(NormalizeHint));
+            OnPropertyChanged(nameof(SelectedClipAudioFadeInSeconds));
+            OnPropertyChanged(nameof(SelectedClipAudioFadeOutSeconds));
+            OnPropertyChanged(nameof(SelectedClipDuckingRole));
+            OnPropertyChanged(nameof(SelectedClipDuckingAmountDb));
+            OnPropertyChanged(nameof(SelectedClipDuckingAttackSeconds));
+            OnPropertyChanged(nameof(SelectedClipDuckingReleaseSeconds));
+            OnPropertyChanged(nameof(SelectedClipDuckingThresholdDb));
+            OnPropertyChanged(nameof(IsDuckingTargetSelected));
             OnPropertyChanged(nameof(SelectedClipIsReversed));
+            OnPropertyChanged(nameof(SelectedClipSpeed));
             OnPropertyChanged(nameof(CanAddKeyframeAtPlayhead));
             OnPropertyChanged(nameof(AudioBindingHint));
             OnPropertyChanged(nameof(IsVisualizationClipSelected));
@@ -562,7 +583,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         try
         {
             peak = await _peakProvider
-                .GetPeakAsync(clip.SourcePath, clip.InPointSeconds, clip.DurationSeconds)
+                .GetPeakAsync(clip.SourcePath, clip.InPointSeconds, clip.SourceDurationSeconds)
                 .ConfigureAwait(true);
         }
         catch (Exception ex)
@@ -590,6 +611,104 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             : $"ピーク {peakText} → ゲイン {sign}{gainDb:F1} dB（目標 {targetDb:F1} dBFS）";
     }
 
+    // ---- 音声フェード／ダッキング（インスペクタ） ----
+
+    /// <summary>選択中クリップの音声フェードインの長さ（タイムライン秒、0〜60）。連続変更は欄の GotFocus でスナップショットを取る流儀（ノーマライズ目標と同じ）。</summary>
+    public double SelectedClipAudioFadeInSeconds
+    {
+        get => SelectedClip?.AudioFadeInSeconds ?? 0;
+        set
+        {
+            if (SelectedClip is null)
+                return;
+            SelectedClip.AudioFadeInSeconds = AudioGainEnvelope.ClampFadeSeconds(value);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>選択中クリップの音声フェードアウトの長さ（タイムライン秒、0〜60）。</summary>
+    public double SelectedClipAudioFadeOutSeconds
+    {
+        get => SelectedClip?.AudioFadeOutSeconds ?? 0;
+        set
+        {
+            if (SelectedClip is null)
+                return;
+            SelectedClip.AudioFadeOutSeconds = AudioGainEnvelope.ClampFadeSeconds(value);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>選択中クリップのダッキングの役割（なし／対象／トリガー）。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。</summary>
+    public DuckingRole SelectedClipDuckingRole
+    {
+        get => SelectedClip?.DuckingRole ?? DuckingRole.None;
+        set
+        {
+            if (SelectedClip is null || SelectedClip.DuckingRole == value)
+                return;
+            BeginEdit();
+            SelectedClip.DuckingRole = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsDuckingTargetSelected));
+        }
+    }
+
+    /// <summary>選択中クリップがダッキング対象か（対象用パラメータ欄の表示に使う）。</summary>
+    public bool IsDuckingTargetSelected => SelectedClip?.DuckingRole == DuckingRole.Target;
+
+    /// <summary>ダッキングで下げる量（dB、0〜30）。対象クリップだけが使う。</summary>
+    public double SelectedClipDuckingAmountDb
+    {
+        get => SelectedClip?.DuckingAmountDb ?? AudioGainEnvelope.DefaultDuckAmountDb;
+        set
+        {
+            if (SelectedClip is null)
+                return;
+            SelectedClip.DuckingAmountDb = AudioGainEnvelope.ClampDuckAmountDb(value);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>ダッキングのアタック（秒、0.005〜2）。対象クリップだけが使う。</summary>
+    public double SelectedClipDuckingAttackSeconds
+    {
+        get => SelectedClip?.DuckingAttackSeconds ?? AudioGainEnvelope.DefaultAttackSeconds;
+        set
+        {
+            if (SelectedClip is null)
+                return;
+            SelectedClip.DuckingAttackSeconds = AudioGainEnvelope.ClampAttackSeconds(value);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>ダッキングのリリース（秒、0.005〜5）。対象クリップだけが使う。</summary>
+    public double SelectedClipDuckingReleaseSeconds
+    {
+        get => SelectedClip?.DuckingReleaseSeconds ?? AudioGainEnvelope.DefaultReleaseSeconds;
+        set
+        {
+            if (SelectedClip is null)
+                return;
+            SelectedClip.DuckingReleaseSeconds = AudioGainEnvelope.ClampReleaseSeconds(value);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>トリガー検出のしきい値（dBFS、-90〜0）。対象クリップだけが使う。変えるとトリガー区間の再解析が要るが、解析は再生・書き出し時にキャッシュキー（しきい値を含む）で取り直される。</summary>
+    public double SelectedClipDuckingThresholdDb
+    {
+        get => SelectedClip?.DuckingThresholdDb ?? AudioGainEnvelope.DefaultThresholdDb;
+        set
+        {
+            if (SelectedClip is null)
+                return;
+            SelectedClip.DuckingThresholdDb = AudioGainEnvelope.ClampThresholdDb(value);
+            OnPropertyChanged();
+        }
+    }
+
     /// <summary>選択中クリップの逆再生（映像・音声とも逆向きに再生する）。離散的な変更なので、代入前にアンドゥ用スナップショットを取る。切り替えるとプレビューが描き直される。</summary>
     public bool SelectedClipIsReversed
     {
@@ -600,6 +719,31 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
                 return;
             BeginEdit();
             SelectedClip.IsReversed = value;
+            OnPropertyChanged();
+            NotifyTimelineChanged();
+        }
+    }
+
+    /// <summary>
+    /// 選択中クリップの再生速度（倍率、0.1〜4.0。1.0 が等速）。
+    /// 変更は TimelineEditor.ChangeSpeed が行う（素材の使用範囲は変えず、
+    /// タイムライン上の長さ = 使用範囲 ÷ 速度 に合わせる）。
+    /// スライダーの連続変更ではアンドゥ用スナップショットは欄の GotFocus
+    /// （EditableField_GotFocus）が操作の開始時に1回だけ取る流儀のため、
+    /// ここでは BeginEdit しない（ノーマライズの目標ピークと同じ扱い）。
+    /// 長さが変わるので NotifyTimelineChanged でタイムライン・プレビューを更新する。
+    /// </summary>
+    public double SelectedClipSpeed
+    {
+        get => SelectedClip?.Speed ?? 1.0;
+        set
+        {
+            if (SelectedClip is null)
+                return;
+            var clamped = Clip.ClampSpeed(value);
+            if (Math.Abs(SelectedClip.Speed - clamped) < 1e-12)
+                return;
+            TimelineEditor.ChangeSpeed(SelectedClip, clamped);
             OnPropertyChanged();
             NotifyTimelineChanged();
         }
@@ -1196,6 +1340,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
     public ICommand PlayPauseCommand { get; }
     public ICommand SplitCommand { get; }
     public ICommand DeleteClipCommand { get; }
+    public ICommand RippleDeleteClipCommand { get; }
+    public ICommand GroupClipsCommand { get; }
+    public ICommand UngroupClipCommand { get; }
     public ICommand AddTextClipCommand { get; }
 
     public FfmpegSettings FfmpegSettings => _ffmpegSettings;
@@ -1429,6 +1576,102 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             if (track.Clips.Remove(SelectedClip))
                 break;
         }
+        _multiSelectedClips.Remove(SelectedClip);
+        OnPropertyChanged(nameof(MultiSelectedClips));
+        // グループの残りが1個になったら自動解除する（1個だけのグループは意味を持たない）。
+        ClipGroups.CleanupSingletonGroups(Project);
+        SelectedClip = null;
+        NotifyTimelineChanged();
+    }
+
+    // ---- 複数選択・グループ化・リップル削除 ----
+
+    /// <summary>複数選択中のクリップ（主選択 SelectedClip とは別に保持する。グループ化の対象）。</summary>
+    public IReadOnlyList<Clip> MultiSelectedClips => _multiSelectedClips;
+
+    /// <summary>選択中クリップがグループに属しているか（グループ解除メニューの有効化・表示用）。</summary>
+    public bool IsSelectedClipGrouped => SelectedClip is not null && ClipGroups.IsGrouped(SelectedClip);
+
+    /// <summary>Ctrl+クリックで複数選択を切り替える。切り替えたクリップを主選択にもする。</summary>
+    public void ToggleClipSelection(Clip clip)
+    {
+        if (_multiSelectedClips.Contains(clip))
+            _multiSelectedClips.Remove(clip);
+        else
+            _multiSelectedClips.Add(clip);
+        SelectedClip = clip;
+        OnPropertyChanged(nameof(MultiSelectedClips));
+        NotifyTimelineChanged();
+    }
+
+    /// <summary>
+    /// グループ化（Ctrl+G）。対象は複数選択＋主選択の和集合。
+    /// 2個未満なら何もしない（その旨をステータスに出す）。1回の操作としてアンドゥできる。
+    /// グループ化後は複数選択を解く（グループ自体が選択単位になるため）。
+    /// </summary>
+    public void GroupSelectedClips()
+    {
+        var targets = _multiSelectedClips
+            .Concat(SelectedClip is null ? Array.Empty<Clip>() : new[] { SelectedClip })
+            .Distinct()
+            .Where(c => Project.Tracks.Any(t => t.Clips.Contains(c)))
+            .ToList();
+        if (targets.Count < 2)
+        {
+            StatusMessage = "グループ化には2個以上のクリップが必要です。Ctrl+クリックで複数選択してください。";
+            return;
+        }
+        BeginEdit();
+        ClipGroups.GroupClips(Project, targets);
+        _multiSelectedClips.Clear();
+        OnPropertyChanged(nameof(MultiSelectedClips));
+        OnPropertyChanged(nameof(IsSelectedClipGrouped));
+        NotifyTimelineChanged();
+        StatusMessage = $"{targets.Count} 個のクリップをグループ化しました。ドラッグでまとめて移動・トリミングできます。";
+    }
+
+    /// <summary>グループ解除（Ctrl+Shift+G）。選択中クリップのグループ全体を解除する。</summary>
+    public void UngroupSelectedClip()
+    {
+        if (SelectedClip is null || !ClipGroups.IsGrouped(SelectedClip))
+            return;
+        BeginEdit();
+        var count = ClipGroups.Ungroup(Project, SelectedClip.GroupId);
+        OnPropertyChanged(nameof(IsSelectedClipGrouped));
+        NotifyTimelineChanged();
+        StatusMessage = $"グループを解除しました（{count} 個のクリップ）。";
+    }
+
+    /// <summary>
+    /// リップル削除（Shift+Del：同トラックのみ／allTracks: 全トラックの後続も詰まる）。
+    /// 通常削除（Del）と区別する操作。選択中クリップがグループに属する場合は
+    /// グループ全員をそれぞれのトラックでリップル削除する（グループ単位の削除）。
+    /// マーカーは動かさない（ClipGroups / TimelineEditor の設計規則）。
+    /// </summary>
+    public void RippleDeleteSelectedClip(bool allTracks = false)
+    {
+        if (SelectedClip is null)
+            return;
+        var scope = allTracks ? RippleScope.AllTracks : RippleScope.SameTrack;
+        BeginEdit();
+        if (ClipGroups.IsGrouped(SelectedClip))
+        {
+            // グループ全員を消す。各トラックで開始の遅い順に処理すると、同じトラックの
+            // グループ内後続が先に消え、詰め量の二重計算を避けられる。
+            foreach (var member in ClipGroups.GetClips(Project, SelectedClip.GroupId).OrderByDescending(c => c.StartSeconds).ToList())
+                TimelineEditor.RippleDeleteClip(Project, member, scope);
+            StatusMessage = "グループをリップル削除しました（後続クリップが前に詰まります）。";
+        }
+        else
+        {
+            TimelineEditor.RippleDeleteClip(Project, SelectedClip, scope);
+            StatusMessage = allTracks
+                ? "リップル削除しました（全トラックの後続が前に詰まります）。"
+                : "リップル削除しました（同じトラックの後続が前に詰まります）。";
+        }
+        _multiSelectedClips.RemoveAll(c => !Project.Tracks.Any(t => t.Clips.Contains(c)));
+        OnPropertyChanged(nameof(MultiSelectedClips));
+        ClipGroups.CleanupSingletonGroups(Project);
         SelectedClip = null;
         NotifyTimelineChanged();
     }
@@ -2356,13 +2599,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         await _timelineExporter.ExportAsync(Project, outputPath, settings, progress, ct).ConfigureAwait(true);
     }
 
-    /// <summary>単一クリップの区間書き出し（最初の経路の確認用）。逆再生クリップは逆向きに書き出す。</summary>
+    /// <summary>単一クリップの区間書き出し（最初の経路の確認用）。逆再生クリップは逆向きに、速度変更クリップは速度を変えて書き出す（素材側の長さは SourceDurationSeconds）。</summary>
     public Task ExportSingleClipAsync(
         Clip clip, string outputPath, ExportSettings settings,
         IProgress<double>? progress = null, CancellationToken ct = default)
         => _exportService.ExportSingleClipAsync(
-            clip.SourcePath, clip.InPointSeconds, clip.DurationSeconds,
-            outputPath, settings, progress, ct, clip.IsReversed);
+            clip.SourcePath, clip.InPointSeconds, clip.SourceDurationSeconds,
+            outputPath, settings, progress, ct, clip.IsReversed, clip.Speed);
 
     public Task<SKBitmap> RenderPreviewAsync(
         double timeSeconds, (int Width, int Height)? maxDisplaySize = null,
@@ -2397,7 +2640,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         PlayheadSeconds = next;
     }
 
-    /// <summary>再生ヘッド位置でアクティブな音声つきクリップの音を全て鳴らす。無ければ止める。逆再生クリップは逆向きに鳴らす。ノーマライズが有効なクリップはピークから計算したゲインを掛ける（書き出しと同じ計算・同じ提供口）。ピーク解析が終わるまで再生開始が少し遅れることがある（2回目以降はキャッシュ済み）。解析に失敗したクリップは元の音量で鳴らす。</summary>
+    /// <summary>再生ヘッド位置でアクティブな音声つきクリップの音を全て鳴らす。無ければ止める。逆再生クリップは逆向きに鳴らす。速度変更クリップはリサンプリングで速度を変えて鳴らす（ピッチも変わる。書き出しは atempo でピッチ保持のため、プレビューと書き出しでピッチだけが違う）。ノーマライズが有効なクリップはピークから計算したゲインを掛ける（書き出しと同じ計算・同じ提供口）。ピーク解析が終わるまで再生開始が少し遅れることがある（2回目以降はキャッシュ済み）。解析に失敗したクリップは元の音量で鳴らす。</summary>
     public async void StartAudioAtPlayhead()
     {
         var generation = ++_audioPlayGeneration;
@@ -2422,7 +2665,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             try
             {
                 var peak = await _peakProvider.GetPeakAsync(
-                    x.Clip.SourcePath, x.Clip.InPointSeconds, x.Clip.DurationSeconds)
+                    x.Clip.SourcePath, x.Clip.InPointSeconds, x.Clip.SourceDurationSeconds)
                     .ConfigureAwait(false);
                 return peak.Available
                     ? AudioNormalizer.ComputeGain(peak.PeakLinear, x.Clip.NormalizeTargetDb)
@@ -2434,6 +2677,22 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             }
         })).ConfigureAwait(true);
 
+        // フェード／ダッキング包絡も全クリップ分まとめて作る（書き出しと同じ
+        // Core 計算・同じトリガー区間提供口）。ダッキング対象はトリガーの
+        // 鳴っている区間を解析する。測れなければフェードだけが効く。
+        var envelopes = await Task.WhenAll(actives.Select(async x =>
+        {
+            var needsDucking = x.Clip.DuckingRole == DuckingRole.Target;
+            if (!needsDucking && x.Clip.AudioFadeInSeconds <= 0 && x.Clip.AudioFadeOutSeconds <= 0)
+                return null;
+            var triggerIntervals = needsDucking
+                ? await CollectPreviewTriggerIntervalsAsync(x.Clip).ConfigureAwait(false)
+                : (IReadOnlyList<AudioSegment>)Array.Empty<AudioSegment>();
+            return AudioGainEnvelope.HasEnvelope(x.Clip, triggerIntervals)
+                ? AudioGainEnvelope.BuildBreakpoints(x.Clip, triggerIntervals)
+                : null;
+        })).ConfigureAwait(true);
+
         // 解析を待っている間に停止されたり鳴らし直されたりしたら、古い再生は捨てる。
         if (!IsPlaying || generation != _audioPlayGeneration)
             return;
@@ -2443,8 +2702,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
             x.Clip.GetSourceTimeSeconds(PlayheadSeconds),
             x.Clip.IsReversed,
             x.Clip.InPointSeconds,
-            x.Clip.InPointSeconds + x.Clip.DurationSeconds,
-            gains[i])).ToList();
+            x.Clip.InPointSeconds + x.Clip.SourceDurationSeconds,
+            gains[i],
+            x.Clip.Speed,
+            envelopes[i],
+            PlayheadSeconds - x.Clip.StartSeconds)).ToList();
 
         try
         {
@@ -2454,6 +2716,35 @@ public sealed class MainViewModel : INotifyPropertyChanged, IProjectSessionHost,
         {
             StatusMessage = $"音声の再生に失敗しました：{ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// プレビュー用：対象クリップに効くトリガー区間（タイムライン絶対秒）を集める。
+    /// 書き出し（AudioExportPlanner）と同じ提供口・同じ Core 収集関数を使う。
+    /// 解析に失敗したトリガーは区間なしとして扱い、再生は止めない。
+    /// </summary>
+    private async Task<List<AudioSegment>> CollectPreviewTriggerIntervalsAsync(Clip target)
+    {
+        var segmentsByTrigger = new Dictionary<string, IReadOnlyList<AudioSegment>>();
+        foreach (var trigger in Project.Tracks.SelectMany(t => t.Clips)
+                     .Where(c => c.DuckingRole == DuckingRole.Trigger && c.Id != target.Id
+                                 && !string.IsNullOrEmpty(c.SourcePath)))
+        {
+            try
+            {
+                segmentsByTrigger[trigger.Id] = await _activityProvider
+                    .GetActiveSegmentsAsync(trigger.SourcePath, trigger.InPointSeconds,
+                        trigger.SourceDurationSeconds, target.DuckingThresholdDb)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                segmentsByTrigger[trigger.Id] = Array.Empty<AudioSegment>();
+            }
+        }
+        return AudioGainEnvelope.CollectTriggerIntervals(
+            Project, target,
+            trigger => segmentsByTrigger.TryGetValue(trigger.Id, out var s) ? s : Array.Empty<AudioSegment>());
     }
 
     /// <summary>再生中なら音声を再生ヘッド位置から鳴らし直す（シーク後に呼ぶ）。</summary>

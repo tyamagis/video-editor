@@ -15,23 +15,35 @@ public sealed class ReversedAudioStream : WaveStream
     private readonly float[] _samples;
     private readonly int _channels;
     private readonly int _startFrame; // 最初に返すフレーム（再生ヘッド位置の素材時刻に対応する区間内フレーム）。
-    private int _nextFrame; // 次に返すフレーム（_startFrame から 0 へ向かって減っていく）。
+    private readonly double _step; // 1出力フレームあたりに素材側へ戻るフレーム数（速度。1.0 が等速）。
+    private double _nextPosition; // 次に返すフレームの位置（小数。_startFrame から 0 へ向かって _step ずつ減っていく）。
     private long _positionBytes;
+    private readonly IReadOnlyList<Editor.Core.GainBreakpoint>? _envelope; // フェード／ダッキング包絡（任意）。
+    private readonly double _envelopeStartLocalSeconds; // 最初の出力フレームのクリップ相対時刻（タイムライン秒）。
+    private long _outputFrames; // これまで返した出力フレーム数（包絡の時刻計算用）。
 
     public override WaveFormat WaveFormat { get; }
 
     /// <param name="waveFormat">デコード済みサンプルの形式（IEEE float）。</param>
     /// <param name="samples">区間内のサンプル（float・インターリーブ、順向きの並び）。</param>
     /// <param name="startFrame">最初に返すフレームの区間内インデックス（0〜総フレーム数-1）。範囲外は丸める。</param>
-    public ReversedAudioStream(WaveFormat waveFormat, float[] samples, int startFrame)
+    /// <param name="step">速度（1出力フレームあたりに戻る素材フレーム数）。2.0 で2倍速（1フレームおき）、0.5 でスロー（同じフレームを2回）。0以下・NaN は 1.0。</param>
+    public ReversedAudioStream(
+        WaveFormat waveFormat, float[] samples, int startFrame, double step = 1.0,
+        IReadOnlyList<Editor.Core.GainBreakpoint>? envelope = null, double envelopeStartLocalSeconds = 0)
     {
         WaveFormat = waveFormat;
         _samples = samples;
         _channels = Math.Max(1, waveFormat.Channels);
+        _step = double.IsNaN(step) || step <= 0 ? 1.0 : step;
+        _envelope = envelope;
+        _envelopeStartLocalSeconds = envelopeStartLocalSeconds;
         var totalFrames = samples.Length / _channels;
         _startFrame = totalFrames <= 0 ? -1 : Math.Clamp(startFrame, 0, totalFrames - 1);
-        _nextFrame = _startFrame;
-        Length = _startFrame < 0 ? 0 : (long)(_startFrame + 1) * BlockAlign;
+        _nextPosition = _startFrame;
+        // 出力フレーム数：素材位置 startFrame, startFrame-step, … と点サンプリングするため、
+        // floor(startFrame / step) + 1 フレーム（step=1 で従来どおり startFrame+1）。
+        Length = _startFrame < 0 ? 0 : (long)(Math.Floor(_startFrame / _step) + 1) * BlockAlign;
     }
 
     public override long Length { get; }
@@ -41,44 +53,57 @@ public sealed class ReversedAudioStream : WaveStream
         get => _positionBytes;
         set
         {
-            // バイト位置から読み進めたフレーム数を求め、次に返すフレームを決める。
+            // バイト位置から読み進めた出力フレーム数を求め、次に返すフレームを決める。
             // WaveOut は順次読むだけだが、シークされても辻褄が合うようにする。
-            var framesRead = (int)Math.Clamp(value / BlockAlign, 0, _startFrame + 1);
-            _nextFrame = _startFrame - framesRead;
-            _positionBytes = (long)framesRead * BlockAlign;
+            var maxFrames = Length / BlockAlign;
+            var framesRead = (long)Math.Clamp(value / BlockAlign, 0, maxFrames);
+            _nextPosition = _startFrame - framesRead * _step;
+            _positionBytes = framesRead * BlockAlign;
+            _outputFrames = framesRead;
         }
     }
 
     /// <summary>逆向きにフレームを読む。読み切ったら 0 を返す。</summary>
     public override int Read(byte[] buffer, int offset, int count)
     {
-        if (_nextFrame < 0)
+        if (_nextPosition < 0)
             return 0;
         var framesWanted = count / BlockAlign;
-        var framesToRead = Math.Min(framesWanted, _nextFrame + 1);
+        var framesToRead = Math.Min(framesWanted, (int)Math.Floor(_nextPosition) + 1);
         if (framesToRead <= 0)
             return 0;
 
         var span = buffer.AsSpan(offset, framesToRead * BlockAlign);
         for (var i = 0; i < framesToRead; i++)
         {
-            var frame = _nextFrame - i;
+            var frame = (int)Math.Floor(_nextPosition);
+            // 包絡は出力フレーム位置（タイムライン時刻）で評価する。逆再生でも
+            // 聞こえる順序はタイムライン方向のため、素材位置ではなく出力側で数える
+            // （フェードインは素材の末尾ではなくクリップ先頭で効く）。
+            var gain = 1.0f;
+            if (_envelope is not null)
+            {
+                var local = _envelopeStartLocalSeconds
+                    + (double)(_outputFrames + i) / Math.Max(1, WaveFormat.SampleRate);
+                gain = (float)Editor.Core.AudioGainEnvelope.EvaluateBreakpoints(_envelope, local);
+            }
             for (var ch = 0; ch < _channels; ch++)
             {
-                var sample = _samples[frame * _channels + ch];
+                var sample = _samples[frame * _channels + ch] * gain;
                 // IEEE float（4バイト）として書き出す。
                 BitConverter.TryWriteBytes(span.Slice((i * _channels + ch) * 4, 4), sample);
             }
+            _nextPosition -= _step;
         }
+        _outputFrames += framesToRead;
 
-        _nextFrame -= framesToRead;
         var bytesRead = framesToRead * BlockAlign;
         _positionBytes += bytesRead;
         return bytesRead;
     }
 
     /// <summary>このストリームが最後まで読み切ったか（再生終了の目安）。</summary>
-    public bool IsExhausted => _nextFrame < 0;
+    public bool IsExhausted => _nextPosition < 0;
 }
 
 /// <summary>逆再生のための音声デコード。クリップの使用区間だけをデコードする。</summary>

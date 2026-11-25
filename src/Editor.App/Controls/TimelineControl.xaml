@@ -14,7 +14,8 @@
       </ComboBox>
       <CheckBox x:Name="ShowWaveformBox" Content="波形表示" Margin="12,0,0,0" Foreground="{StaticResource AppForeground}"
                 IsChecked="True" Checked="ShowWaveformBox_Changed" Unchecked="ShowWaveformBox_Changed" />
-      <CheckBox x:Name="SnapBox" Content="スナップ" Margin="12,0,0,0" IsChecked="True" Foreground="{StaticResource AppForeground}" />
+      <CheckBox x:Name="SnapBox" Content="スナップ" Margin="12,0,0,0" IsChecked="True" Foreground="{StaticResource AppForeground}"
+                ToolTip="移動・トリミング時にマーカー・他クリップの端・再生ヘッド・拍（拍グリッド時）へ吸着します（閾値 8px）。Alt+トリミングでリップル、Ctrl+クリックで複数選択（グループ化用）" />
       <TextBlock Text="ズーム" VerticalAlignment="Center" Margin="12,0,4,0" Foreground="{StaticResource AppForeground}" />
       <Slider x:Name="ZoomSlider" Width="120" Minimum="20" Maximum="400" Value="80"
               VerticalAlignment="Center" ValueChanged="ZoomSlider_ValueChanged" Foreground="{StaticResource AppForeground}" />

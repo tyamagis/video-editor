@@ -26,11 +26,41 @@ public partial class TimelineControl : UserControl
 
     private readonly Dictionary<Clip, SKRect> _clipRects = new();
 
-    private enum DragMode { None, Move, Trim, Seek, Marker }
+    private enum DragMode { None, Move, Trim, TrimStart, Seek, Marker }
     private DragMode _dragMode = DragMode.None;
     private Clip? _dragClip;
     private Marker? _dragMarker;
     private double _dragOffsetX;
+
+    /// <summary>スナップ閾値（ピクセル）。秒への換算は SnapToleranceSeconds（ズームに連動する）。</summary>
+    private const double SnapThresholdPixels = 8.0;
+
+    /// <summary>ドラッグ開始時点のクリップ状態（ドラッグ対象とそのグループ全員）。ドラッグ中はこの原点から計算し直すため、行き過ぎて戻す操作も正しく効く。</summary>
+    private readonly Dictionary<Clip, (double Start, double Duration, double InPoint)> _dragOrigins = new();
+
+    /// <summary>ドラッグ開始時点の全クリップの開始位置（リップルトリミングで後続を原点から計算し直すため）。</summary>
+    private readonly Dictionary<Clip, double> _dragAllStarts = new();
+
+    /// <summary>スナップ閾値（秒）＝ 8px ÷ ズーム。既定ズーム 80px/s で 0.1 秒。</summary>
+    private double SnapToleranceSeconds => SnapThresholdPixels / Math.Max(1, PixelsPerSecond);
+
+    private Clip? _selectedClip;
+
+    /// <summary>選択中クリップ（描画で強調する）。MainWindow が ViewModel と同期する。</summary>
+    public Clip? SelectedClip
+    {
+        get => _selectedClip;
+        set { _selectedClip = value; InvalidateTimeline(); }
+    }
+
+    private IReadOnlyCollection<Clip> _multiSelectedClips = Array.Empty<Clip>();
+
+    /// <summary>複数選択中のクリップ（Ctrl+クリック。グループ化の対象）。MainWindow が ViewModel と同期する。</summary>
+    public IReadOnlyCollection<Clip> MultiSelectedClips
+    {
+        get => _multiSelectedClips;
+        set { _multiSelectedClips = value ?? Array.Empty<Clip>(); InvalidateTimeline(); }
+    }
 
     /// <summary>このドラッグでアンドゥ用の合図を出したか（1回のドラッグで1回だけ出す）。</summary>
     private bool _editSnapshotTaken;
@@ -123,6 +153,8 @@ public partial class TimelineControl : UserControl
     public event EventHandler? SeekDragFinished;
     /// <summary>クリップがクリックされた。</summary>
     public event EventHandler<Clip>? ClipSelected;
+    /// <summary>クリップが Ctrl+クリックされた（複数選択の切り替え。グループ化用）。</summary>
+    public event EventHandler<Clip>? ClipToggleRequested;
     /// <summary>マーカーがルーラー上でクリックされた（選択する）。</summary>
     public event EventHandler<Marker>? MarkerSelected;
     /// <summary>マーカー追加ボタンが押された。</summary>
@@ -427,14 +459,27 @@ public partial class TimelineControl : UserControl
         };
 
         using var fillPaint = new SKPaint { Color = fill, IsAntialias = true };
+        // 選択中は白く太く、複数選択中は琥珀色で枠を強調する。
+        var isSelected = SelectedClip == clip;
+        var isMultiSelected = _multiSelectedClips.Contains(clip);
         using var strokePaint = new SKPaint
         {
-            Color = SKColors.White.WithAlpha(80),
+            Color = isSelected ? SKColors.White
+                : isMultiSelected ? new SKColor(0xFF, 0xD1, 0x66)
+                : SKColors.White.WithAlpha(80),
+            StrokeWidth = isSelected || isMultiSelected ? 2.5f : 1f,
             Style = SKPaintStyle.Stroke,
             IsAntialias = true
         };
         canvas.DrawRoundRect(rect, 4, 4, fillPaint);
         canvas.DrawRoundRect(rect, 4, 4, strokePaint);
+
+        // グループ化されたクリップは上端にマゼンタの帯を引く（同じ帯同士が1グループ）。
+        if (ClipGroups.IsGrouped(clip))
+        {
+            using var groupPaint = new SKPaint { Color = new SKColor(0xFF, 0x2E, 0x88), IsAntialias = true };
+            canvas.DrawRect(new SKRect(rect.Left + 4, rect.Top + 2, rect.Right - 4, rect.Top + 5), groupPaint);
+        }
 
         if (ShowWaveform && clip.Kind == ClipKind.Audio)
             DrawWaveform(canvas, clip, rect, visibleWidth);
@@ -442,7 +487,11 @@ public partial class TimelineControl : UserControl
         if (w > 30)
         {
             using var textPaint = CreateTextPaint(12, SKColors.White);
-            canvas.DrawText(clip.Name, rect.Left + 6, rect.Top + 18, textPaint);
+            // 速度変更クリップは名前の後ろに倍率を出す（等速は従来どおり名前だけ）。
+            var label = Math.Abs(clip.Speed - 1.0) > 1e-9
+                ? $"{clip.Name} ×{clip.Speed:0.##}"
+                : clip.Name;
+            canvas.DrawText(label, rect.Left + 6, rect.Top + 18, textPaint);
         }
     }
 
@@ -605,10 +654,23 @@ public partial class TimelineControl : UserControl
             if (!rect.Contains((float)pos.X, (float)pos.Y))
                 continue;
 
+            // Ctrl+クリックは複数選択の切り替え（ドラッグは始めない）。グループ化の対象を選ぶ操作。
+            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            {
+                ClipToggleRequested?.Invoke(this, clip);
+                return;
+            }
+
             ClipSelected?.Invoke(this, clip);
+            CaptureDragOrigins(clip);
             if (Math.Abs(pos.X - rect.Right) <= 6)
             {
                 _dragMode = DragMode.Trim;
+                _dragClip = clip;
+            }
+            else if (Math.Abs(pos.X - rect.Left) <= 6 && rect.Width > 12)
+            {
+                _dragMode = DragMode.TrimStart;
                 _dragClip = clip;
             }
             else
@@ -623,6 +685,58 @@ public partial class TimelineControl : UserControl
         // 空き領域はシーク扱い。ドラッグ中は再生ヘッドが追従する。
         _dragMode = DragMode.Seek;
         SeekRequested?.Invoke(this, pos.X / PixelsPerSecond);
+    }
+
+    /// <summary>ドラッグ開始時点の状態を記録する（対象クリップ＋そのグループ全員＋リップル用の全クリップ開始位置）。</summary>
+    private void CaptureDragOrigins(Clip clip)
+    {
+        _dragOrigins.Clear();
+        _dragAllStarts.Clear();
+        if (Project is null)
+            return;
+        var targets = ClipGroups.IsGrouped(clip)
+            ? ClipGroups.GetClips(Project, clip.GroupId).ToList()
+            : new List<Clip> { clip };
+        if (!targets.Contains(clip))
+            targets.Add(clip);
+        foreach (var target in targets)
+            _dragOrigins[target] = (target.StartSeconds, target.DurationSeconds, target.InPointSeconds);
+        foreach (var any in Project.Tracks.SelectMany(t => t.Clips))
+            _dragAllStarts[any] = any.StartSeconds;
+    }
+
+    /// <summary>ドラッグ対象（グループ含む）を開始時点の状態へ戻す。トリミング系は毎回のマウス移動で原点から適用し直す。</summary>
+    private void RestoreDragOrigins()
+    {
+        foreach (var (clip, origin) in _dragOrigins)
+        {
+            clip.StartSeconds = origin.Start;
+            clip.DurationSeconds = origin.Duration;
+            clip.InPointSeconds = origin.InPoint;
+        }
+        foreach (var (clip, start) in _dragAllStarts)
+            clip.StartSeconds = start;
+    }
+
+    /// <summary>
+    /// スナップ候補を作る。マーカー・再生ヘッド・他クリップの端・先頭（SnapCalculator）に、
+    /// 拍グリッド表示のときだけ拍（検出拍があればそちら、無ければ BPM グリッド）を
+    /// 対象時刻の近傍だけ足す。スナップが無効なら null（呼び出し側は吸着しない）。
+    /// </summary>
+    private List<double>? BuildSnapCandidates(IReadOnlyCollection<Clip> excluded, double nearTimeSeconds, double nearTime2Seconds)
+    {
+        if (Project is null || SnapBox.IsChecked != true)
+            return null;
+        var candidates = SnapCalculator.CollectSnapTimes(Project, excluded, PlayheadSeconds);
+        if (GridMode == GridMode.Beat)
+        {
+            var beats = DetectedBeatMap is { BeatTimes.Count: > 0 } detected
+                ? detected.BeatTimes
+                : BeatGridCalculator.GetBeatTimes(Project.Bpm, Project.BeatOffsetSeconds, Math.Max(Project.DurationSeconds, nearTime2Seconds + 1));
+            candidates = SnapCalculator.WithNearbyBeatTimes(candidates, beats, nearTimeSeconds, SnapToleranceSeconds);
+            candidates = SnapCalculator.WithNearbyBeatTimes(candidates, beats, nearTime2Seconds, SnapToleranceSeconds);
+        }
+        return candidates;
     }
 
     private void OnMouseMove(object sender, MouseEventArgs e)
@@ -663,34 +777,78 @@ public partial class TimelineControl : UserControl
         }
 
         var pos = e.GetPosition(TimelineElement);
+        var dragTargets = _dragOrigins.Keys.ToList();
+        var grouped = dragTargets.Count > 1 || ClipGroups.IsGrouped(_dragClip);
         if (_dragMode == DragMode.Move)
         {
-            var newStart = (pos.X - _dragOffsetX) / PixelsPerSecond;
-            if (SnapBox.IsChecked == true && GridMode == GridMode.Beat)
+            var requestedStart = (pos.X - _dragOffsetX) / PixelsPerSecond;
+            var origin = _dragOrigins[_dragClip];
+            if (grouped)
             {
-                // 検出ビートマップがあるときは検出拍にスナップする（BPMグリッドでは
-                // 検出拍から最大で拍の25%ずれるため）。無ければ BPM グリッドにスナップする。
-                double? snapped;
-                if (DetectedBeatMap is { BeatTimes.Count: > 0 } detected)
-                    snapped = BeatGridCalculator.SnapToBeatTimes(newStart, detected.BeatTimes);
-                else
-                    snapped = BeatGridCalculator.SnapToBeat(
-                        newStart, Project.Bpm, Project.BeatOffsetSeconds);
-                if (snapped.HasValue)
-                    newStart = snapped.Value;
+                // グループ移動：外接範囲の両端でスナップし、全員に同じ delta を適用する（相対位置を保つ）。
+                var groupStart = dragTargets.Min(c => _dragOrigins[c].Start);
+                var groupEnd = dragTargets.Max(c => _dragOrigins[c].Start + _dragOrigins[c].Duration);
+                var desiredGroupStart = groupStart + (requestedStart - origin.Start);
+                var candidates = BuildSnapCandidates(dragTargets, desiredGroupStart, desiredGroupStart + (groupEnd - groupStart));
+                var snappedGroupStart = candidates is null
+                    ? desiredGroupStart
+                    : SnapCalculator.SnapMoveStart(desiredGroupStart, groupEnd - groupStart, candidates, SnapToleranceSeconds);
+                var delta = Math.Max(snappedGroupStart - groupStart, -groupStart);
+                foreach (var target in dragTargets)
+                    target.StartSeconds = _dragOrigins[target].Start + delta;
             }
-            TimelineEditor.MoveClip(_dragClip, newStart);
+            else
+            {
+                var candidates = BuildSnapCandidates(dragTargets, requestedStart, requestedStart + _dragClip.DurationSeconds);
+                var newStart = candidates is null
+                    ? requestedStart
+                    : SnapCalculator.SnapMoveStart(requestedStart, origin.Duration, candidates, SnapToleranceSeconds);
+                TimelineEditor.MoveClip(_dragClip, newStart);
+            }
         }
-        else if (_dragMode == DragMode.Trim)
+        else if (_dragMode == DragMode.Trim || _dragMode == DragMode.TrimStart)
         {
-            var newEnd = pos.X / PixelsPerSecond;
+            // トリミングはドラッグ開始時点の状態から毎回計算し直す（行き過ぎて戻しても効く）。
+            // Alt を押しながらのトリミングはリップル（後続が追随する。同トラックのみ・単体クリップのみ）。
+            var ripple = Keyboard.Modifiers.HasFlag(ModifierKeys.Alt) && !grouped;
+            var track = Project.Tracks.FirstOrDefault(t => t.Clips.Contains(_dragClip));
+            RestoreDragOrigins();
             try
             {
-                TimelineEditor.TrimClipEnd(_dragClip, newEnd);
+                if (_dragMode == DragMode.Trim)
+                {
+                    var requestedEnd = pos.X / PixelsPerSecond;
+                    var candidates = BuildSnapCandidates(dragTargets, requestedEnd, requestedEnd);
+                    var newEnd = candidates is null
+                        ? requestedEnd
+                        : SnapCalculator.SnapToNearest(requestedEnd, candidates, SnapToleranceSeconds) ?? requestedEnd;
+                    if (ripple && track is not null)
+                        TimelineEditor.RippleTrimClipEnd(track, _dragClip, newEnd);
+                    else if (grouped && ClipGroups.GetBounds(Project, _dragClip.GroupId) is { } bounds
+                        && Math.Abs(bounds.EndSeconds - _dragClip.EndSeconds) <= ClipGroups.EdgeToleranceSeconds)
+                        ClipGroups.TrimGroupEnd(Project, _dragClip.GroupId, newEnd);
+                    else
+                        TimelineEditor.TrimClipEnd(_dragClip, newEnd);
+                }
+                else
+                {
+                    var requestedStart = pos.X / PixelsPerSecond;
+                    var candidates = BuildSnapCandidates(dragTargets, requestedStart, requestedStart);
+                    var newStart = candidates is null
+                        ? requestedStart
+                        : SnapCalculator.SnapToNearest(requestedStart, candidates, SnapToleranceSeconds) ?? requestedStart;
+                    if (ripple && track is not null)
+                        TimelineEditor.RippleTrimClipStart(track, _dragClip, newStart);
+                    else if (grouped && ClipGroups.GetBounds(Project, _dragClip.GroupId) is { } bounds
+                        && Math.Abs(bounds.StartSeconds - _dragClip.StartSeconds) <= ClipGroups.EdgeToleranceSeconds)
+                        ClipGroups.TrimGroupStart(Project, _dragClip.GroupId, newStart);
+                    else
+                        TimelineEditor.TrimClipStart(_dragClip, newStart);
+                }
             }
             catch (ArgumentOutOfRangeException)
             {
-                // 範囲外のトリミングは無視する。
+                // 範囲外のトリミングは無視する（原点の状態のまま）。
             }
         }
         InvalidateTimeline();

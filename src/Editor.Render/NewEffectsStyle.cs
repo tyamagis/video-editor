@@ -161,13 +161,22 @@ internal static class NewEffectsStyle
     /// 列タイル並列）。UI の半径上限 8 は変えない（SAT 化で半径依存コストはほぼ消えるが、
     /// 半径を上げても見た目の変化は頭打ちで、既存のキーフレーム・旧プロジェクト互換を
     /// 守るため。上限を上げる必要はない）。
-    /// メモリ：6枚 × (W+1)×(H+1) × 8B。4K で約 400MB。int だと和が 4K で 2.115e9 と
+    /// メモリ：SAT は横帯（バンド）単位で作り直す。出力行 [y0,y1) の処理に必要なのは
+    /// 入力行 [y0-r, y1+r) だけなので、その範囲の局所 SAT（6枚 × (W+1)×(帯高+2r+1) × 8B）
+    /// だけを保持し、帯ごとに使い回す。SAT の上限は約 64MiB を目安に帯高を決める
+    /// （4K・r=8 で SAT は約 380MiB → 約 64MiB）。int だと和が 4K で 2.115e9 と
     /// int.MaxValue（2.147e9）に肉薄し、より大きい画像で溢れるため long を選んだ。
-    /// バンド分割はしない（400MB は許容範囲で、分割は再構築のオーバーヘッドと
-    /// 境界処理の複雑さを増やすだけ）。
+    /// ビット同一性の根拠：局所 SAT の矩形和は全体 SAT の矩形和と同一の整数（long の
+    /// 逐次加算は範囲によらず同じ和になる）であり、平均・分散・タイブレーク・ブレンドの
+    /// double 演算は全体 SAT 版と同一の式・順序のため、帯境界でも出力は変わらない。
+    /// 帯境界の画素は前後の帯の両方で必要な入力行（半径分）を含む局所 SAT から計算する。
     /// 端の領域は画像内に丸める（サンプル数が減る分だけ平均・分散の分母も減らす）。
     /// </summary>
     internal static SKBitmap ApplyKuwahara(SKBitmap src, ClipEffect effect)
+        => ApplyKuwaharaBanded(src, effect, forcedBandHeight: 0);
+
+    /// <summary>帯高を指定してクワハラを適用する（テスト用。0 以下なら自動決定）。</summary>
+    internal static SKBitmap ApplyKuwaharaBanded(SKBitmap src, ClipEffect effect, int forcedBandHeight)
     {
         ArgumentNullException.ThrowIfNull(src);
         ArgumentNullException.ThrowIfNull(effect);
@@ -181,12 +190,23 @@ internal static class NewEffectsStyle
         var rowBytes = src.RowBytes;
         var srcBytes = ReadBytes(src);
         var dstBytes = new byte[rowBytes * height];
-
-        // ---- 積分画像（summed-area table）の構築 ----
-        // sat[c][y * stride + x] = 画素 (0..y-1, 0..x-1) の和。0行目・0列目は 0。
-        // c: 0=R, 1=G, 2=B, 3=R^2, 4=G^2, 5=B^2。すべて long（非負整数の和なので丸め誤差なし）。
         var stride = width + 1;
-        var satSize = stride * (height + 1);
+
+        // ---- 帯高の決定 ----
+        // 局所 SAT 1行分は 6枚 × stride × 8B。SAT 全体が目安（64MiB）に収まるよう、
+        // 帯高＋前後の半径分（2r）＋SAT の余分な1行 を行数予算から引いて帯高を決める。
+        const long targetSatBytes = 64L * 1024 * 1024;
+        var bytesPerSatRow = 6L * stride * sizeof(long);
+        var satRowBudget = (int)Math.Max(2L * radius + 2, targetSatBytes / Math.Max(1, bytesPerSatRow));
+        var bandHeight = Math.Clamp(satRowBudget - (2 * radius + 1), 1, height);
+        if (forcedBandHeight > 0)
+            bandHeight = Math.Min(forcedBandHeight, height);
+
+        // ---- 積分画像（summed-area table）のバッファ（帯ごとに使い回す） ----
+        // sat[c][y * stride + x] = 帯の先頭行から見た画素 (0..y-1, 0..x-1) の和。0行目・0列目は 0。
+        // c: 0=R, 1=G, 2=B, 3=R^2, 4=G^2, 5=B^2。すべて long（非負整数の和なので丸め誤差なし）。
+        var maxLocalRows = Math.Min(height, bandHeight + 2 * radius);
+        var satSize = stride * (maxLocalRows + 1);
         var satR = new long[satSize];
         var satG = new long[satSize];
         var satB = new long[satSize];
@@ -194,133 +214,146 @@ internal static class NewEffectsStyle
         var satG2 = new long[satSize];
         var satB2 = new long[satSize];
 
-        // パス1：行方向プレフィックス（各行は独立なので行並列）。
-        // sat[(y+1)*stride + (x+1)] に行 y の 0..x 列目の和を入れる。
-        Parallel.For(0, height, y =>
+        for (var bandY0 = 0; bandY0 < height; bandY0 += bandHeight)
         {
-            var srcRow = y * rowBytes;
-            var satRow = (y + 1) * stride;
-            long runR = 0, runG = 0, runB = 0, runR2 = 0, runG2 = 0, runB2 = 0;
-            for (var x = 0; x < width; x++)
-            {
-                var i = srcRow + x * 4;
-                var b = srcBytes[i];
-                var g = srcBytes[i + 1];
-                var r = srcBytes[i + 2];
-                runR += r;
-                runG += g;
-                runB += b;
-                runR2 += (long)r * r;
-                runG2 += (long)g * g;
-                runB2 += (long)b * b;
-                var j = satRow + x + 1;
-                satR[j] = runR;
-                satG[j] = runG;
-                satB[j] = runB;
-                satR2[j] = runR2;
-                satG2[j] = runG2;
-                satB2[j] = runB2;
-            }
-        });
+            var bandY1 = Math.Min(height, bandY0 + bandHeight);
+            // この帯の出力に必要な入力行 [srcRowStart, srcRowEnd)。
+            var srcRowStart = Math.Max(0, bandY0 - radius);
+            var srcRowEnd = Math.Min(height, bandY1 + radius);
+            var localHeight = srcRowEnd - srcRowStart;
 
-        // パス2：列方向累積（各列は独立。キャッシュ効率のため列をタイルに分け、
-        // タイル内では行方向に走査して連続アクセスにする）。
-        const int tileWidth = 128;
-        var tileCount = (stride + tileWidth - 1) / tileWidth;
-        Parallel.For(0, tileCount, t =>
-        {
-            var x0 = t * tileWidth;
-            var x1 = Math.Min(stride, x0 + tileWidth);
-            for (var y = 0; y < height; y++)
+            // パス1：行方向プレフィックス（各行は独立なので行並列）。
+            // sat[(ly+1)*stride + (x+1)] に局所行 ly の 0..x 列目の和を入れる。
+            // 前の帯の値はすべて上書きされる（0行目・0列目は初期の 0 のまま使う）。
+            Parallel.For(0, localHeight, ly =>
             {
-                var upper = y * stride;
-                var lower = (y + 1) * stride;
-                for (var x = x0; x < x1; x++)
+                var srcRow = (srcRowStart + ly) * rowBytes;
+                var satRow = (ly + 1) * stride;
+                long runR = 0, runG = 0, runB = 0, runR2 = 0, runG2 = 0, runB2 = 0;
+                for (var x = 0; x < width; x++)
                 {
-                    satR[lower + x] += satR[upper + x];
-                    satG[lower + x] += satG[upper + x];
-                    satB[lower + x] += satB[upper + x];
-                    satR2[lower + x] += satR2[upper + x];
-                    satG2[lower + x] += satG2[upper + x];
-                    satB2[lower + x] += satB2[upper + x];
+                    var i = srcRow + x * 4;
+                    var b = srcBytes[i];
+                    var g = srcBytes[i + 1];
+                    var r = srcBytes[i + 2];
+                    runR += r;
+                    runG += g;
+                    runB += b;
+                    runR2 += (long)r * r;
+                    runG2 += (long)g * g;
+                    runB2 += (long)b * b;
+                    var j = satRow + x + 1;
+                    satR[j] = runR;
+                    satG[j] = runG;
+                    satB[j] = runB;
+                    satR2[j] = runR2;
+                    satG2[j] = runG2;
+                    satB2[j] = runB2;
                 }
-            }
-        });
+            });
 
-        // ---- 画素ループ（行並列） ----
-        // 1画素の4象限は SAT 座標で (sx0,sy0)-(sx1,sy1) / (sx2,sy0)-(sx3,sy1) /
-        // (sx0,sy2)-(sx1,sy3) / (sx2,sy2)-(sx3,sy3)。矩形和は4隅の SAT 値から
-        // S(x1,y1) - S(x0,y1) - S(x1,y0) + S(x0,y0) で求める（long の整数演算で厳密）。
-        // 平均・分散の double 演算は旧 RegionStats と同一の式・順序にしてある。
-        Parallel.For(0, height, y =>
-        {
-            var row = y * rowBytes;
-            // y 方向の SAT 境界（行内で共通）。
-            // 上側象限：[max(0,y-r) .. y]、下側象限：[y .. min(H-1,y+r)]（両端を含む）。
-            var sy0 = Math.Max(0, y - radius);
-            var sy1 = y + 1;
-            var sy2 = y;
-            var sy3 = Math.Min(height - 1, y + radius) + 1;
-            var nTop = (double)(y - sy0 + 1);
-            var nBottom = (double)(sy3 - y);
-            for (var x = 0; x < width; x++)
+            // パス2：列方向累積（各列は独立。キャッシュ効率のため列をタイルに分け、
+            // タイル内では行方向に走査して連続アクセスにする）。
+            const int tileWidth = 128;
+            var tileCount = (stride + tileWidth - 1) / tileWidth;
+            Parallel.For(0, tileCount, t =>
             {
-                var i = row + x * 4;
-                var a = srcBytes[i + 3];
-                // x 方向の SAT 境界。左側象限：[max(0,x-r) .. x]、右側象限：[x .. min(W-1,x+r)]。
-                var sx0 = Math.Max(0, x - radius);
-                var sx1 = x + 1;
-                var sx2 = x;
-                var sx3 = Math.Min(width - 1, x + radius) + 1;
-                var nLeft = (double)(x - sx0 + 1);
-                var nRight = (double)(sx3 - x);
-
-                var bestVariance = double.PositiveInfinity;
-                double bestR = 0, bestG = 0, bestB = 0;
-                // 4つの方形領域（画素 (x,y) を角で共有する (r+1)×(r+1) の正方形）。
-                // q=0: 左上、q=1: 右上、q=2: 左下、q=3: 右下。タイブレークは旧実装と同じく
-                // 最初（q の小さい方）を優先（variance < bestVariance の厳密比較）。
-                for (var q = 0; q < 4; q++)
+                var x0 = t * tileWidth;
+                var x1 = Math.Min(stride, x0 + tileWidth);
+                for (var ly = 0; ly < localHeight; ly++)
                 {
-                    var left = q % 2 == 0;
-                    var top = q < 2;
-                    var rx0 = left ? sx0 : sx2;
-                    var ry0 = top ? sy0 : sy2;
-                    var rx1 = left ? sx1 : sx3;
-                    var ry1 = top ? sy1 : sy3;
-                    var n = (left ? nLeft : nRight) * (top ? nTop : nBottom);
-                    var o00 = ry0 * stride + rx0;
-                    var o10 = ry0 * stride + rx1;
-                    var o01 = ry1 * stride + rx0;
-                    var o11 = ry1 * stride + rx1;
-                    var sumR = satR[o11] - satR[o01] - satR[o10] + satR[o00];
-                    var sumG = satG[o11] - satG[o01] - satG[o10] + satG[o00];
-                    var sumB = satB[o11] - satB[o01] - satB[o10] + satB[o00];
-                    var sumR2 = satR2[o11] - satR2[o01] - satR2[o10] + satR2[o00];
-                    var sumG2 = satG2[o11] - satG2[o01] - satG2[o10] + satG2[o00];
-                    var sumB2 = satB2[o11] - satB2[o01] - satB2[o10] + satB2[o00];
-                    var meanR = sumR / n;
-                    var meanG = sumG / n;
-                    var meanB = sumB / n;
-                    // 分散は E[x²] - E[x]² で求める（浮動小数誤差で負になった分は 0 に丸める）。
-                    var variance = (sumR2 / n - meanR * meanR)
-                        + (sumG2 / n - meanG * meanG)
-                        + (sumB2 / n - meanB * meanB);
-                    variance = Math.Max(0, variance);
-                    if (variance < bestVariance)
+                    var upper = ly * stride;
+                    var lower = (ly + 1) * stride;
+                    for (var x = x0; x < x1; x++)
                     {
-                        bestVariance = variance;
-                        bestR = meanR;
-                        bestG = meanG;
-                        bestB = meanB;
+                        satR[lower + x] += satR[upper + x];
+                        satG[lower + x] += satG[upper + x];
+                        satB[lower + x] += satB[upper + x];
+                        satR2[lower + x] += satR2[upper + x];
+                        satG2[lower + x] += satG2[upper + x];
+                        satB2[lower + x] += satB2[upper + x];
                     }
                 }
-                dstBytes[i] = (byte)Math.Clamp(Math.Round(srcBytes[i] * (1 - strength) + bestB * strength), 0, a);
-                dstBytes[i + 1] = (byte)Math.Clamp(Math.Round(srcBytes[i + 1] * (1 - strength) + bestG * strength), 0, a);
-                dstBytes[i + 2] = (byte)Math.Clamp(Math.Round(srcBytes[i + 2] * (1 - strength) + bestR * strength), 0, a);
-                dstBytes[i + 3] = a;
-            }
-        });
+            });
+
+            // ---- 画素ループ（帯の行だけを並列処理） ----
+            // 1画素の4象限は SAT 座標で (sx0,sy0)-(sx1,sy1) / (sx2,sy0)-(sx3,sy1) /
+            // (sx0,sy2)-(sx1,sy3) / (sx2,sy2)-(sx3,sy3)。矩形和は4隅の SAT 値から
+            // S(x1,y1) - S(x0,y1) - S(x1,y0) + S(x0,y0) で求める（long の整数演算で厳密）。
+            // y 座標は全体座標から局所座標（- srcRowStart）へ移すだけで、和そのものは
+            // 全体 SAT 版と同一になる。平均・分散の double 演算も同一の式・順序。
+            Parallel.For(bandY0, bandY1, y =>
+            {
+                var row = y * rowBytes;
+                // y 方向の SAT 境界（局所座標、行内で共通）。
+                // 上側象限：[max(0,y-r) .. y]、下側象限：[y .. min(H-1,y+r)]（両端を含む）。
+                var gy0 = Math.Max(0, y - radius);
+                var gy1 = Math.Min(height - 1, y + radius);
+                var sy0 = gy0 - srcRowStart;
+                var sy1 = y - srcRowStart + 1;
+                var sy2 = y - srcRowStart;
+                var sy3 = gy1 - srcRowStart + 1;
+                var nTop = (double)(y - gy0 + 1);
+                var nBottom = (double)(gy1 - y + 1);
+                for (var x = 0; x < width; x++)
+                {
+                    var i = row + x * 4;
+                    var a = srcBytes[i + 3];
+                    // x 方向の SAT 境界。左側象限：[max(0,x-r) .. x]、右側象限：[x .. min(W-1,x+r)]。
+                    var sx0 = Math.Max(0, x - radius);
+                    var sx1 = x + 1;
+                    var sx2 = x;
+                    var sx3 = Math.Min(width - 1, x + radius) + 1;
+                    var nLeft = (double)(x - sx0 + 1);
+                    var nRight = (double)(sx3 - x);
+
+                    var bestVariance = double.PositiveInfinity;
+                    double bestR = 0, bestG = 0, bestB = 0;
+                    // 4つの方形領域（画素 (x,y) を角で共有する (r+1)×(r+1) の正方形）。
+                    // q=0: 左上、q=1: 右上、q=2: 左下、q=3: 右下。タイブレークは旧実装と同じく
+                    // 最初（q の小さい方）を優先（variance < bestVariance の厳密比較）。
+                    for (var q = 0; q < 4; q++)
+                    {
+                        var left = q % 2 == 0;
+                        var top = q < 2;
+                        var rx0 = left ? sx0 : sx2;
+                        var ry0 = top ? sy0 : sy2;
+                        var rx1 = left ? sx1 : sx3;
+                        var ry1 = top ? sy1 : sy3;
+                        var n = (left ? nLeft : nRight) * (top ? nTop : nBottom);
+                        var o00 = ry0 * stride + rx0;
+                        var o10 = ry0 * stride + rx1;
+                        var o01 = ry1 * stride + rx0;
+                        var o11 = ry1 * stride + rx1;
+                        var sumR = satR[o11] - satR[o01] - satR[o10] + satR[o00];
+                        var sumG = satG[o11] - satG[o01] - satG[o10] + satG[o00];
+                        var sumB = satB[o11] - satB[o01] - satB[o10] + satB[o00];
+                        var sumR2 = satR2[o11] - satR2[o01] - satR2[o10] + satR2[o00];
+                        var sumG2 = satG2[o11] - satG2[o01] - satG2[o10] + satG2[o00];
+                        var sumB2 = satB2[o11] - satB2[o01] - satB2[o10] + satB2[o00];
+                        var meanR = sumR / n;
+                        var meanG = sumG / n;
+                        var meanB = sumB / n;
+                        // 分散は E[x²] - E[x]² で求める（浮動小数誤差で負になった分は 0 に丸める）。
+                        var variance = (sumR2 / n - meanR * meanR)
+                            + (sumG2 / n - meanG * meanG)
+                            + (sumB2 / n - meanB * meanB);
+                        variance = Math.Max(0, variance);
+                        if (variance < bestVariance)
+                        {
+                            bestVariance = variance;
+                            bestR = meanR;
+                            bestG = meanG;
+                            bestB = meanB;
+                        }
+                    }
+                    dstBytes[i] = (byte)Math.Clamp(Math.Round(srcBytes[i] * (1 - strength) + bestB * strength), 0, a);
+                    dstBytes[i + 1] = (byte)Math.Clamp(Math.Round(srcBytes[i + 1] * (1 - strength) + bestG * strength), 0, a);
+                    dstBytes[i + 2] = (byte)Math.Clamp(Math.Round(srcBytes[i + 2] * (1 - strength) + bestR * strength), 0, a);
+                    dstBytes[i + 3] = a;
+                }
+            });
+        }
         return BitmapFromBytes(dstBytes, width, height);
     }
 

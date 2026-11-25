@@ -180,7 +180,10 @@ public enum EffectKind
     EdgeDetect,
     Solarize,
     Kuwahara,
-    TiltShift
+    TiltShift,
+    Sharpen,
+    Emboss,
+    Lut
 }
 
 /// <summary>
@@ -238,6 +241,9 @@ public enum EffectKind
 /// <item>Solarize：Amount = 反転のしきい値（0〜1。この明るさ以上の画素の色を反転する。既定0.5）。Radius は使わない。</item>
 /// <item>Kuwahara：Amount = カーネル半径（px、1〜8。大きいほど絵画的だが重い）、Radius = 強さ（0〜1。0 で元の画像、1 で完全な油絵風）。画素ループが重いため 4K では注意。</item>
 /// <item>TiltShift：Amount = ぼかしの強さ（0〜1。0 でぼかしなし）、Radius = ピントの合う帯の幅（画面高さに対する割合、0.1〜0.8。既定0.3。帯の中心は画面中央）。</item>
+/// <item>Sharpen：Amount = 輪郭強調の強さ（0〜2。0 で変化なし、既定1）。アンシャープマスク（元画像 − ぼかし画像 の差分を Amount 倍して加算）。Radius = ぼかし半径（px、1〜10。既定2。大きいほど太い輪郭が強調される）。</item>
+/// <item>Emboss：Amount = 浮き彫りの強さ（0〜1。0 で変化なし、既定0.8。1 で完全なグレースケールの浮き彫り）。Radius = 浮き彫りの距離（px、1〜4。既定1。エンボスカーネルのサンプル間隔＝彫りの深さ）。</item>
+/// <item>Lut：3D LUT（.cube）による色変換。Amount = 強さ（0〜1。0 で元の色、1 で完全適用、既定1）。Radius は使わない。LUTファイルは LutPath でパス参照する（プロジェクトには埋め込まない。素材ファイルと同じ扱い）。ファイルが見つからない・読み込めない場合は無効化され、元の色のまま描かれる。</item>
 /// </list>
 /// </summary>
 public sealed class ClipEffect
@@ -256,6 +262,16 @@ public sealed class ClipEffect
     public double Midtones { get; set; }
 
     public string KeyColorHex { get; set; } = "#00FF00";
+
+    /// <summary>
+    /// LUTエフェクト（EffectKind.Lut）で使う .cube ファイルへのパス。他の種類では使わない。
+    /// 素材ファイルと同じくパス参照のみで、プロジェクトファイルには埋め込まない
+    /// （LUTは数百KB〜数MBになり得て、プロジェクトJSONが肥大化するため）。
+    /// 旧プロジェクトの JSON にはこの項目が無いが、読み込み時に空文字列になる
+    /// （System.Text.Json は欠けた項目を既定値で補う）ため、そのまま開ける。
+    /// 空・ファイルが無い・パースできない場合は LUT は無効化され、元の色のまま描かれる。
+    /// </summary>
+    public string LutPath { get; set; } = string.Empty;
 
     public ClipEffect Clone() => (ClipEffect)MemberwiseClone();
 
@@ -510,6 +526,17 @@ public sealed class Clip
     public string Name { get; set; } = string.Empty;
     public ClipKind Kind { get; set; } = ClipKind.Video;
 
+    /// <summary>
+    /// グループの Id（グループ化されたクリップ同士で同じ値。グループ化は ClipGroups.GroupClips が割り当てる）。
+    /// null または空は「グループに属さない」。グループはトラックをまたげる
+    /// （グループ操作は ClipGroups がプロジェクト全体から同じ Id のクリップを集めて行う）。
+    /// 旧プロジェクト（JSON に項目無し）は null として開ける
+    /// （System.Text.Json は欠けた項目を既定値で補う）。
+    /// 分割（TimelineEditor.SplitClip）では Clone がこの値をコピーするため、
+    /// 分割した両片は同じグループに残る（意図した規則。テストで担保する）。
+    /// </summary>
+    public string? GroupId { get; set; }
+
     /// <summary>素材ファイルへのパス。テキストクリップでは空。</summary>
     public string SourcePath { get; set; } = string.Empty;
 
@@ -568,6 +595,70 @@ public sealed class Clip
     /// <summary>ノーマライズの目標ピークレベル（dBFS、-30〜0）。既定 -1 dBFS。AudioNormalizer.ClampTargetDb で丸める。</summary>
     public double NormalizeTargetDb { get; set; } = AudioNormalizer.DefaultTargetDb;
 
+    private double _audioFadeInSeconds;
+    private double _audioFadeOutSeconds;
+
+    /// <summary>
+    /// 音声フェードインの長さ（タイムライン秒、0〜60。0 で無し）。
+    /// タイムライン秒で解釈する（素材秒ではない）ため、速度変更しても
+    /// 「タイムラインで何秒かけて聞こえ始めるか」は変わらない。逆再生でも
+    /// 向きはタイムライン基準（クリップ先頭がフェードイン）。
+    /// 代入時に AudioGainEnvelope.ClampFadeSeconds で丸める。旧プロジェクト
+    /// （JSON に項目無し）は 0（フェード無し）として開ける。
+    /// </summary>
+    public double AudioFadeInSeconds
+    {
+        get => _audioFadeInSeconds;
+        set => _audioFadeInSeconds = AudioGainEnvelope.ClampFadeSeconds(value);
+    }
+
+    /// <summary>音声フェードアウトの長さ（タイムライン秒、0〜60。0 で無し）。解釈は AudioFadeInSeconds と同じ。</summary>
+    public double AudioFadeOutSeconds
+    {
+        get => _audioFadeOutSeconds;
+        set => _audioFadeOutSeconds = AudioGainEnvelope.ClampFadeSeconds(value);
+    }
+
+    /// <summary>
+    /// ダッキングにおける役割（なし／対象／トリガー）。1クリップ1役割。
+    /// 対象クリップは、プロジェクト内のトリガークリップが鳴っている区間で
+    /// 音量が自動で下がる。旧プロジェクト（JSON に項目無し）は None として開ける。
+    /// </summary>
+    public DuckingRole DuckingRole { get; set; } = DuckingRole.None;
+
+    private double _duckingAmountDb = AudioGainEnvelope.DefaultDuckAmountDb;
+    private double _duckingAttackSeconds = AudioGainEnvelope.DefaultAttackSeconds;
+    private double _duckingReleaseSeconds = AudioGainEnvelope.DefaultReleaseSeconds;
+    private double _duckingThresholdDb = AudioGainEnvelope.DefaultThresholdDb;
+
+    /// <summary>ダッキングで下げる量（dB、0〜30）。対象クリップだけが使う。既定 12 dB。代入時に丸める。</summary>
+    public double DuckingAmountDb
+    {
+        get => _duckingAmountDb;
+        set => _duckingAmountDb = AudioGainEnvelope.ClampDuckAmountDb(value);
+    }
+
+    /// <summary>ダッキングのアタック（秒、0.005〜2）。トリガーが鳴り始めてから下がりきるまでの速さ。対象クリップだけが使う。既定 0.10 秒。</summary>
+    public double DuckingAttackSeconds
+    {
+        get => _duckingAttackSeconds;
+        set => _duckingAttackSeconds = AudioGainEnvelope.ClampAttackSeconds(value);
+    }
+
+    /// <summary>ダッキングのリリース（秒、0.005〜5）。トリガーが止んでから戻りきるまでの速さ。対象クリップだけが使う。既定 0.30 秒。</summary>
+    public double DuckingReleaseSeconds
+    {
+        get => _duckingReleaseSeconds;
+        set => _duckingReleaseSeconds = AudioGainEnvelope.ClampReleaseSeconds(value);
+    }
+
+    /// <summary>トリガー検出のしきい値（dBFS、-90〜0）。この RMS 以上を「トリガーが鳴っている」とみなす。対象クリップ側の設定（トリガーが複数対象を下げる場合、対象ごとに変えられる）。既定 -40 dBFS。</summary>
+    public double DuckingThresholdDb
+    {
+        get => _duckingThresholdDb;
+        set => _duckingThresholdDb = AudioGainEnvelope.ClampThresholdDb(value);
+    }
+
     /// <summary>
     /// 逆再生するか。ON のとき、クリップ全体を逆向きに再生する（映像はフレームを逆向きに、
     /// 音声も逆向きに）。旧プロジェクト（JSON に項目無し）は false として開ける
@@ -575,6 +666,37 @@ public sealed class Clip
     /// テキスト・画像・可視化クリップでは意味を持たない（映像・音声クリップが対象）。
     /// </summary>
     public bool IsReversed { get; set; }
+
+    /// <summary>再生速度の最小値（倍率）。これより遅くはしない。</summary>
+    public const double MinSpeed = 0.1;
+
+    /// <summary>再生速度の最大値（倍率）。これより速くはしない。</summary>
+    public const double MaxSpeed = 4.0;
+
+    private double _speed = 1.0;
+
+    /// <summary>
+    /// 再生速度（倍率。1.0 が等速、0.5 がスロー、2.0 が2倍速）。
+    /// タイムライン上の長さ（DurationSeconds）は「素材の使用範囲 ÷ 速度」で決まるため、
+    /// 速度を変えると長さも変わる（変更は TimelineEditor.ChangeSpeed が素材範囲を保って行う。
+    /// このプロパティへの直接代入は長さを変えない）。
+    /// 代入時に [MinSpeed, MaxSpeed] へ丸める（NaN は 1.0）。JSON 読み込みもセッターを通るため、
+    /// 範囲外の値が保存されていても安全な範囲で開ける。旧プロジェクト（JSON に項目無し）は
+    /// 1.0（等速）として開ける（System.Text.Json は欠けた項目を既定値で補う）。
+    /// テキスト・画像・可視化クリップでは意味を持たない（映像・音声クリップが対象）。
+    /// </summary>
+    public double Speed
+    {
+        get => _speed;
+        set => _speed = ClampSpeed(value);
+    }
+
+    /// <summary>速度の値を [MinSpeed, MaxSpeed] に丸める（NaN は等速 1.0）。</summary>
+    public static double ClampSpeed(double value)
+        => double.IsNaN(value) ? 1.0 : Math.Clamp(value, MinSpeed, MaxSpeed);
+
+    /// <summary>素材の使用範囲の長さ（秒）＝ タイムライン上の長さ × 速度。ピーク解析の範囲・書き出しの切り出し範囲など、素材側の長さが要る場所で使う。</summary>
+    public double SourceDurationSeconds => DurationSeconds * Speed;
 
     public List<KeyframeTrack> KeyframeTracks { get; set; } = new();
 
@@ -584,18 +706,34 @@ public sealed class Clip
         => timeSeconds >= StartSeconds && timeSeconds < EndSeconds;
 
     /// <summary>
-    /// タイムライン時刻に対応する素材内時刻。順再生なら InPoint + 経過時間、
-    /// 逆再生なら InPoint + Duration - 経過時間（クリップ先頭では素材の末尾、
-    /// クリップ末尾では素材の先頭になる）。経過時間は [0, Duration] に丸めるため、
-    /// トランジション区間などクリップ範囲外の時刻でも範囲内の素材時刻を返す。
+    /// タイムライン時刻に対応する素材内時刻。経過時間に速度を掛けた分だけ素材が進む。
+    /// 順再生なら InPoint + 経過時間×速度、逆再生なら InPoint + 使用範囲 − 経過時間×速度
+    /// （クリップ先頭では素材の末尾、クリップ末尾では素材の先頭になる）。
+    /// 経過時間は [0, Duration] に丸めるため、トランジション区間などクリップ範囲外の
+    /// 時刻でも範囲内の素材時刻を返す。
     /// 呼び出し側でタイムライン時刻がクリップ範囲内かは別に確認すること。
+    /// プレビュー描画・書き出し・音声バインド・可視化はすべてこの写像を通るため、
+    /// 速度変更と逆再生は両方で同じ結果になる。
     /// </summary>
     public double GetSourceTimeSeconds(double timeSeconds)
     {
         var local = Math.Clamp(timeSeconds - StartSeconds, 0, DurationSeconds);
         return IsReversed
-            ? InPointSeconds + DurationSeconds - local
-            : InPointSeconds + local;
+            ? InPointSeconds + SourceDurationSeconds - local * Speed
+            : InPointSeconds + local * Speed;
+    }
+
+    /// <summary>
+    /// 素材内時刻に対応するタイムライン時刻（GetSourceTimeSeconds の逆写像）。
+    /// 素材時刻は使用範囲 [InPoint, InPoint + 使用範囲] に丸めてから変換する。
+    /// BPM検出の拍・無音区間など、素材側で検出した時刻をタイムラインへ写すのに使う。
+    /// </summary>
+    public double GetTimelineTimeSeconds(double sourceTimeSeconds)
+    {
+        var sourceOffset = Math.Clamp(sourceTimeSeconds - InPointSeconds, 0, SourceDurationSeconds);
+        return IsReversed
+            ? StartSeconds + DurationSeconds - sourceOffset / Speed
+            : StartSeconds + sourceOffset / Speed;
     }
 
     public KeyframeTrack EnsureTrack(string parameterName)

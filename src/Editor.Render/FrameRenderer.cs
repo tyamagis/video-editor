@@ -96,12 +96,12 @@ public sealed class TimelineFrameRenderer : IFrameRenderer
         if (string.IsNullOrEmpty(clip.SourcePath))
             return;
 
-        // 素材内の時刻。逆再生なら Clip.GetSourceTimeSeconds（末尾から前に進む）。
-        // 順再生は従来どおり（トランジション区間でクリップ範囲外の時刻になっても
-        // フレーム取得側に任せるため、ここでは Duration で丸めない）。
-        var sourceTime = clip.IsReversed
-            ? clip.GetSourceTimeSeconds(timeSeconds)
-            : Math.Max(0, clip.InPointSeconds + timeSeconds - clip.StartSeconds);
+        // 素材内の時刻は Clip.GetSourceTimeSeconds に統一する（速度・逆再生の両方を
+        // 含む唯一の写像。プレビューと書き出しは同じここを通る）。
+        // 従来の順再生はトランジション区間でクリップ範囲外の時刻をフレーム取得側に
+        // 任せていたが、写像側で使用範囲に丸める方が安全（範囲外の時刻は端のフレームに
+        // なる。ディゾルブ区間では端フレームが薄く重なるだけで、見た目の差はほぼ無い）。
+        var sourceTime = clip.GetSourceTimeSeconds(timeSeconds);
 
         // まず常駐ストリームから取る。失敗したら単発抽出にフォールバックする。
         if (_streamingSource is not null)

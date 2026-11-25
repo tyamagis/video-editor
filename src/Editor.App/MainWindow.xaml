@@ -38,6 +38,11 @@
         <Separator />
         <MenuItem Header="再生ヘッドで分割 (S)" Click="SplitMenu_Click" />
         <MenuItem Header="選択クリップを削除 (Del)" Click="DeleteMenu_Click" />
+        <MenuItem Header="リップル削除 (Shift+Del)" Click="RippleDeleteMenu_Click" />
+        <MenuItem Header="リップル削除（全トラック）" Click="RippleDeleteAllTracksMenu_Click" />
+        <Separator />
+        <MenuItem Header="グループ化 (Ctrl+G)" Click="GroupMenu_Click" />
+        <MenuItem Header="グループ解除 (Ctrl+Shift+G)" Click="UngroupMenu_Click" IsEnabled="{Binding IsSelectedClipGrouped}" />
         <Separator />
         <MenuItem Header="マーカーを追加 (M)" Click="AddMarkerMenu_Click" />
         <MenuItem Header="前のマーカーへ (Ctrl+M)" Click="PrevMarkerMenu_Click" />
@@ -51,6 +56,9 @@
       <Button Content="{Binding PlayPauseLabel}" Command="{Binding PlayPauseCommand}" Width="80" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" />
       <Button Content="分割" Command="{Binding SplitCommand}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" />
       <Button Content="削除" Command="{Binding DeleteClipCommand}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" />
+      <Button Content="リップル削除" Command="{Binding RippleDeleteClipCommand}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" />
+      <Button Content="グループ化" Command="{Binding GroupClipsCommand}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" />
+      <Button Content="グループ解除" Command="{Binding UngroupClipCommand}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" />
       <Button Content="テキスト追加" Command="{Binding AddTextClipCommand}" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" />
       <ComboBox SelectedValue="{Binding NewVisualizationKind, Mode=TwoWay}" SelectedValuePath="Tag" Width="90" VerticalAlignment="Center" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
         <ComboBoxItem Content="スペクトル" Tag="{x:Static core:VisualizationKind.Spectrum}" />
@@ -395,6 +403,17 @@
                           <ComboBoxItem Content="キー色：緑" Tag="#00FF00" />
                           <ComboBoxItem Content="キー色：青" Tag="#0000FF" />
                         </ComboBox>
+                        <StackPanel Margin="0,4,0,0" Visibility="{Binding ShowLutFile, Converter={StaticResource BoolToVis}}">
+                          <Grid>
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{Binding LutFileName}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{StaticResource AppForeground}" />
+                            <Button Grid.Column="1" Content="LUT選択…" Padding="6,1" Click="ChooseLutFileButton_Click" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" />
+                          </Grid>
+                          <TextBlock Text="{Binding LutStatus}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" Foreground="{StaticResource MutedForeground}" />
+                        </StackPanel>
                       </StackPanel>
                     </Border>
                   </DataTemplate>
@@ -658,6 +677,23 @@
               <TextBlock Text="書き出し時に FFmpeg のノイズ除去（afftdn）で適用されます。プレビューでは効果が聞けません。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
             </StackPanel>
 
+            <TextBlock Text="再生速度" FontWeight="SemiBold" Margin="0,12,0,4" Foreground="{StaticResource AppForeground}" />
+            <StackPanel IsEnabled="{Binding HasAudioClip}">
+              <Grid Margin="0,0,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="64" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="52" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="速度（倍）" VerticalAlignment="Center" Foreground="{StaticResource AppForeground}" />
+                <Slider Grid.Column="1" Minimum="0.1" Maximum="4" VerticalAlignment="Center"
+                        Value="{Binding SelectedClipSpeed, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                        GotFocus="EditableField_GotFocus" />
+                <TextBox Grid.Column="2" Text="{Binding SelectedClipSpeed}" VerticalAlignment="Center" Margin="4,0,0,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" GotFocus="EditableField_GotFocus" />
+              </Grid>
+              <TextBlock Text="素材の使用範囲は変わらず、タイムライン上の長さが「使用範囲 ÷ 速度」になります（0.5倍で2倍の長さ、2倍で半分の長さ）。映像と音声の両方に効き、逆再生とも組み合わせられます。書き出しの音声はピッチを保ちますが、プレビューの音声はピッチも変わります。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
+            </StackPanel>
+
             <TextBlock Text="逆再生" FontWeight="SemiBold" Margin="0,12,0,4" Foreground="{StaticResource AppForeground}" />
             <StackPanel IsEnabled="{Binding HasAudioClip}">
               <CheckBox Content="逆再生する" IsChecked="{Binding SelectedClipIsReversed, Mode=TwoWay}" Foreground="{StaticResource AppForeground}" />
@@ -681,6 +717,95 @@
               </Grid>
               <TextBlock Text="{Binding NormalizeHint}" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
               <TextBlock Text="クリップの音声のピークを目標レベルにそろえます。プレビューと書き出しで同じゲインが使われます。ゲインは +40 dB で止まるため、とても小さい音は目標に届かない場合があります。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
+            </StackPanel>
+
+            <TextBlock Text="音声フェード" FontWeight="SemiBold" Margin="0,12,0,4" Foreground="{StaticResource AppForeground}" />
+            <StackPanel IsEnabled="{Binding HasAudioClip}">
+              <Grid Margin="0,0,0,2">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="64" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="52" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="フェードイン" VerticalAlignment="Center" Foreground="{StaticResource AppForeground}" />
+                <Slider Grid.Column="1" Minimum="0" Maximum="10" VerticalAlignment="Center"
+                        Value="{Binding SelectedClipAudioFadeInSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                        GotFocus="EditableField_GotFocus" />
+                <TextBox Grid.Column="2" Text="{Binding SelectedClipAudioFadeInSeconds}" VerticalAlignment="Center" Margin="4,0,0,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" GotFocus="EditableField_GotFocus" />
+              </Grid>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="64" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="52" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="フェードアウト" VerticalAlignment="Center" Foreground="{StaticResource AppForeground}" />
+                <Slider Grid.Column="1" Minimum="0" Maximum="10" VerticalAlignment="Center"
+                        Value="{Binding SelectedClipAudioFadeOutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                        GotFocus="EditableField_GotFocus" />
+                <TextBox Grid.Column="2" Text="{Binding SelectedClipAudioFadeOutSeconds}" VerticalAlignment="Center" Margin="4,0,0,0" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}" GotFocus="EditableField_GotFocus" />
+              </Grid>
+              <TextBlock Text="長さはタイムライン上の秒数です（0で無し、最大60秒。スライダーは10秒まで、数値入力でそれ以上も指定できます）。速度変更しても聞こえる長さは変わらず、逆再生でもクリップの先頭がフェードインになります。プレビューと書き出しで同じ包絡が使われます。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
+            </StackPanel>
+
+            <TextBlock Text="ダッキング" FontWeight="SemiBold" Margin="0,12,0,4" Foreground="{StaticResource AppForeground}" />
+            <StackPanel IsEnabled="{Binding HasAudioClip}">
+              <ComboBox SelectedValue="{Binding SelectedClipDuckingRole, Mode=TwoWay}" SelectedValuePath="Tag" Background="{StaticResource ControlBackground}" Foreground="{StaticResource AppForeground}" BorderBrush="{StaticResource ControlBorder}">
+                <ComboBoxItem Content="役割なし" Tag="{x:Static core:DuckingRole.None}" />
+                <ComboBoxItem Content="ダッキング対象（BGMなど）" Tag="{x:Static core:DuckingRole.Target}" />
+                <ComboBoxItem Content="ダッキングのトリガー（ナレーションなど）" Tag="{x:Static core:DuckingRole.Trigger}" />
+              </ComboBox>
+              <StackPanel IsEnabled="{Binding IsDuckingTargetSelected}" Margin="0,4,0,0">
+                <Grid Margin="0,0,0,2">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="64" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="52" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="0" Text="下げる量" VerticalAlignment="Center" Foreground="{StaticResource AppForeground}" />
+                  <Slider Grid.Column="1" Minimum="0" Maximum="30" VerticalAlignment="Center"
+                          Value="{Binding SelectedClipDuckingAmountDb, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                          GotFocus="EditableField_GotFocus" />
+                  <TextBlock Grid.Column="2" Text="{Binding SelectedClipDuckingAmountDb, StringFormat={}{0:F0} dB}" VerticalAlignment="Center" HorizontalAlignment="Right" Foreground="{StaticResource AppForeground}" />
+                </Grid>
+                <Grid Margin="0,0,0,2">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="64" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="52" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="0" Text="アタック" VerticalAlignment="Center" Foreground="{StaticResource AppForeground}" />
+                  <Slider Grid.Column="1" Minimum="0.005" Maximum="2" VerticalAlignment="Center"
+                          Value="{Binding SelectedClipDuckingAttackSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                          GotFocus="EditableField_GotFocus" />
+                  <TextBlock Grid.Column="2" Text="{Binding SelectedClipDuckingAttackSeconds, StringFormat={}{0:F2} 秒}" VerticalAlignment="Center" HorizontalAlignment="Right" Foreground="{StaticResource AppForeground}" />
+                </Grid>
+                <Grid Margin="0,0,0,2">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="64" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="52" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="0" Text="リリース" VerticalAlignment="Center" Foreground="{StaticResource AppForeground}" />
+                  <Slider Grid.Column="1" Minimum="0.005" Maximum="5" VerticalAlignment="Center"
+                          Value="{Binding SelectedClipDuckingReleaseSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                          GotFocus="EditableField_GotFocus" />
+                  <TextBlock Grid.Column="2" Text="{Binding SelectedClipDuckingReleaseSeconds, StringFormat={}{0:F2} 秒}" VerticalAlignment="Center" HorizontalAlignment="Right" Foreground="{StaticResource AppForeground}" />
+                </Grid>
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="64" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="52" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="0" Text="検出しきい値" VerticalAlignment="Center" Foreground="{StaticResource AppForeground}" />
+                  <Slider Grid.Column="1" Minimum="-90" Maximum="0" VerticalAlignment="Center"
+                          Value="{Binding SelectedClipDuckingThresholdDb, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                          GotFocus="EditableField_GotFocus" />
+                  <TextBlock Grid.Column="2" Text="{Binding SelectedClipDuckingThresholdDb, StringFormat={}{0:F0} dB}" VerticalAlignment="Center" HorizontalAlignment="Right" Foreground="{StaticResource AppForeground}" />
+                </Grid>
+              </StackPanel>
+              <TextBlock Text="トリガーに指定したクリップが鳴っている区間（しきい値以上の音）で、対象クリップの音量が自動で下がります。既定は -12 dB・アタック 0.10 秒・リリース 0.30 秒・しきい値 -40 dB。プレビューと書き出しで同じ包絡が使われます。" FontSize="11" Foreground="{StaticResource MutedForeground}" TextWrapping="Wrap" Margin="0,4,0,0" />
             </StackPanel>
 
             <TextBlock Text="マーカー" FontWeight="SemiBold" Margin="0,12,0,4" Foreground="{StaticResource AppForeground}" />

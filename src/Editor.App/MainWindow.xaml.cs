@@ -52,6 +52,7 @@ public partial class MainWindow : Window
                 _viewModel.AddMediaToTimeline(item, drop.TimeSeconds);
         };
         TimelineControl.ClipSelected += (_, clip) => _viewModel.SelectedClip = clip;
+        TimelineControl.ClipToggleRequested += (_, clip) => _viewModel.ToggleClipSelection(clip);
         TimelineControl.MarkerSelected += (_, marker) => _viewModel.SelectMarker(marker);
         TimelineControl.AddMarkerRequested += (_, _) => _viewModel.AddMarkerAtPlayhead();
         TimelineControl.PreviousMarkerRequested += (_, _) => _viewModel.JumpToPreviousMarker();
@@ -103,6 +104,16 @@ public partial class MainWindow : Window
         else if (e.PropertyName == nameof(MainViewModel.DetectedBeatMap))
         {
             TimelineControl.DetectedBeatMap = _viewModel.DetectedBeatMap;
+            TimelineControl.InvalidateTimeline();
+        }
+        else if (e.PropertyName == nameof(MainViewModel.SelectedClip))
+        {
+            TimelineControl.SelectedClip = _viewModel.SelectedClip;
+            TimelineControl.InvalidateTimeline();
+        }
+        else if (e.PropertyName == nameof(MainViewModel.MultiSelectedClips))
+        {
+            TimelineControl.MultiSelectedClips = _viewModel.MultiSelectedClips;
             TimelineControl.InvalidateTimeline();
         }
         else if (e.PropertyName == nameof(MainViewModel.SelectedMarker))
@@ -160,10 +171,16 @@ public partial class MainWindow : Window
         // テキスト入力中・コンボボックス操作中・チェックボックス操作中はショートカットを無効化する。
         if (Keyboard.FocusedElement is TextBox or ComboBox or CheckBox)
             return;
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.S)
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) && e.Key == Key.G)
+            _viewModel.UngroupSelectedClip();
+        else if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.G)
+            _viewModel.GroupSelectedClips();
+        else if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.S)
             SaveProjectOrShowDialog();
         else if (e.Key == Key.S)
             _viewModel.SplitAtPlayhead();
+        else if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) && e.Key == Key.Delete)
+            _viewModel.RippleDeleteSelectedClip();
         else if (e.Key == Key.Delete)
             _viewModel.DeleteSelectedClip();
         else if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.M)
@@ -482,6 +499,14 @@ public partial class MainWindow : Window
 
     private void DeleteMenu_Click(object sender, RoutedEventArgs e) => _viewModel.DeleteSelectedClip();
 
+    private void RippleDeleteMenu_Click(object sender, RoutedEventArgs e) => _viewModel.RippleDeleteSelectedClip();
+
+    private void RippleDeleteAllTracksMenu_Click(object sender, RoutedEventArgs e) => _viewModel.RippleDeleteSelectedClip(allTracks: true);
+
+    private void GroupMenu_Click(object sender, RoutedEventArgs e) => _viewModel.GroupSelectedClips();
+
+    private void UngroupMenu_Click(object sender, RoutedEventArgs e) => _viewModel.UngroupSelectedClip();
+
     private void AddMarkerMenu_Click(object sender, RoutedEventArgs e) => _viewModel.AddMarkerAtPlayhead();
 
     private void PrevMarkerMenu_Click(object sender, RoutedEventArgs e) => _viewModel.JumpToPreviousMarker();
@@ -560,6 +585,20 @@ public partial class MainWindow : Window
     {
         if (sender is Button { DataContext: EffectRow row })
             _viewModel.DeleteEffect(row);
+    }
+
+    /// <summary>LUTエフェクトの .cube ファイルを選ぶ。キャンセルすれば何もしない。</summary>
+    private void ChooseLutFileButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: EffectRow row })
+            return;
+        var dialog = new OpenFileDialog
+        {
+            Filter = "3D LUT|*.cube|すべてのファイル|*.*",
+            FileName = row.LutPath
+        };
+        if (dialog.ShowDialog() == true)
+            row.LutPath = dialog.FileName;
     }
 
     private void AddAudioBindingButton_Click(object sender, RoutedEventArgs e)

@@ -38,15 +38,18 @@ public partial class App : Application
         // ピーク解析（音声ノーマライズ用）。プレビューと書き出しで同じ
         // インスタンスを共有し、メモリキャッシュも共有する。
         var peakAnalyzer = new PeakAnalyzer();
+        // ダッキングのトリガー区間解析。プレビューと書き出しで同じインスタンスを
+        // 共有し、メモリキャッシュも共有する（ピーク解析と同じ扱い）。
+        var activityAnalyzer = new AudioActivityAnalyzer();
         _streamingFrameSource = new StreamingFrameSource(ffmpegSettings, mediaProbe);
 
         IFrameRenderer frameRenderer = new TimelineFrameRenderer(thumbnailService, _streamingFrameSource, bandProvider, bandProvider);
         var previewRenderer = new PreviewRenderer(frameRenderer);
-        ITimelineExporter timelineExporter = new FrameSequenceExporter(frameRenderer, ffmpegSettings, mediaProbe, peakAnalyzer);
+        ITimelineExporter timelineExporter = new FrameSequenceExporter(frameRenderer, ffmpegSettings, mediaProbe, peakAnalyzer, activityAnalyzer);
 
         var viewModel = new MainViewModel(
             mediaProbe, exportService, waveformCache,
-            previewRenderer, timelineExporter, ffmpegSettings, beatAnalyzer, bandProvider, silenceDetector, peakAnalyzer);
+            previewRenderer, timelineExporter, ffmpegSettings, beatAnalyzer, bandProvider, silenceDetector, peakAnalyzer, activityAnalyzer);
 
         var window = new MainWindow
         {

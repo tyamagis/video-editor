@@ -13,11 +13,15 @@ internal sealed class AudioExportPlanner
 {
     private readonly IMediaProbe _probe;
     private readonly IAudioPeakProvider? _peakProvider;
+    private readonly IAudioActivityProvider? _activityProvider;
 
-    public AudioExportPlanner(IMediaProbe probe, IAudioPeakProvider? peakProvider = null)
+    public AudioExportPlanner(
+        IMediaProbe probe, IAudioPeakProvider? peakProvider = null,
+        IAudioActivityProvider? activityProvider = null)
     {
         _probe = probe;
         _peakProvider = peakProvider;
+        _activityProvider = activityProvider;
     }
 
     /// <summary>書き出し範囲に入る音声つきクリップの入力計画を作る。音声が無ければ MapLabel は null。</summary>
@@ -54,8 +58,13 @@ internal sealed class AudioExportPlanner
             if (overlapEnd <= overlapStart)
                 continue;
 
-            var sourceStart = clip.InPointSeconds + (overlapStart - clip.StartSeconds);
-            var sourceEnd = clip.InPointSeconds + (overlapEnd - clip.StartSeconds);
+            // 書き出し範囲と重なる部分の素材範囲。素材時刻の写像はプレビューと同じ
+            // Clip.GetSourceTimeSeconds（速度・逆再生を含む）を使う。
+            // 逆再生では開始側と終了側が入れ替わるため、小さい方を開始にする。
+            var mappedStart = clip.GetSourceTimeSeconds(overlapStart);
+            var mappedEnd = clip.GetSourceTimeSeconds(overlapEnd);
+            var sourceStart = Math.Min(mappedStart, mappedEnd);
+            var sourceEnd = Math.Max(mappedStart, mappedEnd);
             var delayMs = (long)Math.Round((overlapStart - startSeconds) * 1000);
             var label = $"a{index}";
             // ノーマライズが有効なクリップは、クリップの使用範囲のピークから
@@ -68,7 +77,7 @@ internal sealed class AudioExportPlanner
                 try
                 {
                     var peak = await _peakProvider
-                        .GetPeakAsync(clip.SourcePath, clip.InPointSeconds, clip.DurationSeconds, ct)
+                        .GetPeakAsync(clip.SourcePath, clip.InPointSeconds, clip.SourceDurationSeconds, ct)
                         .ConfigureAwait(false);
                     if (peak.Available)
                         normalizeGain = AudioNormalizer.ComputeGain(peak.PeakLinear, clip.NormalizeTargetDb);
@@ -78,8 +87,21 @@ internal sealed class AudioExportPlanner
                     // ピーク解析の失敗で書き出しを止めない（元の音量で書き出す）。
                 }
             }
+            // フェード／ダッキング包絡。ダッキング対象はトリガークリップの
+            // 鳴っている区間を解析してタイムラインへ写す（プレビューと同じ提供口・
+            // 同じ Core 計算）。測れなければ区間は空になり、フェードだけが効く。
+            IReadOnlyList<GainBreakpoint>? envelope = null;
+            if (AudioGainEnvelope.HasEnvelope(clip, Array.Empty<AudioSegment>())
+                || clip.DuckingRole == DuckingRole.Target)
+            {
+                var triggerIntervals = await CollectTriggerIntervalsAsync(project, clip, ct)
+                    .ConfigureAwait(false);
+                if (AudioGainEnvelope.HasEnvelope(clip, triggerIntervals))
+                    envelope = AudioGainEnvelope.BuildBreakpoints(clip, triggerIntervals);
+            }
             // フィルタ（ノイズ除去・ノーマライズ・切り出し・逆再生・遅延）は BuildClipFilter が作る。
-            var filter = BuildClipFilter(index, clip, sourceStart, sourceEnd, delayMs, label, normalizeGain);
+            var filter = BuildClipFilter(index, clip, sourceStart, sourceEnd, delayMs, label, normalizeGain,
+                envelope, overlapStart - clip.StartSeconds);
             inputs.Add(new AudioInput(clip.SourcePath, filter, label));
             index++;
         }
@@ -92,18 +114,56 @@ internal sealed class AudioExportPlanner
     }
 
     /// <summary>
+    /// 対象クリップに効くトリガー区間（タイムライン絶対秒）を集める。
+    /// トリガーごとに鳴っている区間を解析し、Core の収集関数で写像・マージする。
+    /// 解析できないトリガーは区間なしとして扱い、書き出しは止めない。
+    /// </summary>
+    private async Task<List<AudioSegment>> CollectTriggerIntervalsAsync(
+        EditorProject project, Clip target, CancellationToken ct)
+    {
+        if (target.DuckingRole != DuckingRole.Target || _activityProvider is null)
+            return new List<AudioSegment>();
+
+        var segmentsByTrigger = new Dictionary<string, IReadOnlyList<AudioSegment>>();
+        foreach (var trigger in project.Tracks.SelectMany(t => t.Clips)
+                     .Where(c => c.DuckingRole == DuckingRole.Trigger && c.Id != target.Id
+                                 && !string.IsNullOrEmpty(c.SourcePath)))
+        {
+            try
+            {
+                segmentsByTrigger[trigger.Id] = await _activityProvider
+                    .GetActiveSegmentsAsync(trigger.SourcePath, trigger.InPointSeconds,
+                        trigger.SourceDurationSeconds, target.DuckingThresholdDb, ct)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                segmentsByTrigger[trigger.Id] = Array.Empty<AudioSegment>();
+            }
+        }
+        return AudioGainEnvelope.CollectTriggerIntervals(
+            project, target,
+            trigger => segmentsByTrigger.TryGetValue(trigger.Id, out var s) ? s : Array.Empty<AudioSegment>());
+    }
+
+    /// <summary>
     /// 音声クリップ1つのフィルタを作る。書き出し範囲に入る部分だけ切り出し、
-    /// 逆再生なら切り出した区間を逆向きにしてから、範囲内の位置まで遅らせる。
+    /// 逆再生なら切り出した区間を逆向きにしてから、速度変更（atempo）を掛け、
+    /// 範囲内の位置まで遅らせる。
     /// areverse は atrim の後に掛ける（切り出した区間だけを逆向きにするため。
     /// atrim の前に掛けると切り出し位置の対応が逆転してしまう）。
-    /// areverse の後に asetpts で PTS を振り直す（areverse が PTS をどう扱うかに
-    /// 依存せず、遅延の基準をそろえるため）。
+    /// atempo は areverse の後に掛ける（逆向きになった後の音の長さを変えるため。
+    /// 順序を入れ替えると結果は同じ長さになるが、ピッチ保持の処理単位が変わり
+    /// 音質が安定しない）。atempo はピッチを保ったまま長さだけを変える。
+    /// areverse / atempo の後に asetpts で PTS を振り直す（両フィルタが PTS を
+    /// どう扱うかに依存せず、遅延の基準をそろえるため）。
     /// normalizeGain はノーマライズの線形倍率（1.0 が等倍）。volume フィルタは
     /// atrim の前に掛ける（ゲインは線形のため、atrim の前後で結果は同じ）。
     /// </summary>
     internal static string BuildClipFilter(
         int index, Clip clip, double sourceStart, double sourceEnd, long delayMs, string label,
-        double normalizeGain = 1.0)
+        double normalizeGain = 1.0,
+        IReadOnlyList<GainBreakpoint>? envelope = null, double envelopeStartLocalSeconds = 0)
     {
         // ノイズ除去が有効なクリップは afftdn で背景ノイズを減らす
         // （設計プラン 5章で FFmpeg のフィルタが第一候補。プレビューでは反映されない）。
@@ -113,8 +173,91 @@ internal sealed class AudioExportPlanner
             : string.Empty;
         var normalize = VolumeFilter(normalizeGain);
         var reverse = clip.IsReversed ? "areverse," : string.Empty;
+        var tempo = AtempoChain(clip.Speed);
+        // フェード／ダッキング包絡は asetpts の直後・adelay の前に掛ける。
+        // この時点のストリーム時刻 t は「書き出し範囲と重なる部分の先頭から
+        // タイムライン方向に進んだ秒数」になっており、包絡のブレークポイント
+        // （クリップ相対・タイムライン秒）から envelopeStartLocalSeconds を
+        // 引いたものと一致する。atrim の前では逆再生・速度変更で対応が壊れ、
+        // adelay の後では書き出し範囲の開始位置に依存してしまうため、この位置。
+        var envelopeFilter = EnvelopeVolumeFilter(envelope, envelopeStartLocalSeconds);
         return $"[{index}:a]{denoise}{normalize}atrim=start={sourceStart:F3}:end={sourceEnd:F3}," +
-               $"{reverse}asetpts=PTS-STARTPTS,adelay={delayMs}:all=1[{label}]";
+               $"{reverse}{tempo}asetpts=PTS-STARTPTS,{envelopeFilter}adelay={delayMs}:all=1[{label}]";
+    }
+
+    /// <summary>
+    /// 包絡のブレークポイント列を ffmpeg の volume フィルタ（eval=frame）にする。
+    /// 式はブレークポイント間の線形補間（Core の EvaluateBreakpoints と同じ）を
+    /// ネストした if で表す。t はストリーム時刻（asetpts 後）で、ブレークポイントの
+    /// 時刻から envelopeStartLocalSeconds（重なり部分のクリップ相対開始秒）を引いて
+    /// そろえる。包絡が無い・全て等倍なら空文字（フィルタを付けない）。
+    /// 式中のカンマはフィルタ引数の引用符（'…'）で保護する。
+    /// </summary>
+    internal static string EnvelopeVolumeFilter(
+        IReadOnlyList<GainBreakpoint>? envelope, double envelopeStartLocalSeconds = 0)
+    {
+        if (envelope is null || envelope.Count == 0)
+            return string.Empty;
+        if (envelope.All(b => Math.Abs(b.Gain - 1.0) <= 1e-9))
+            return string.Empty;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        string F(double v) => v.ToString("F4", inv);
+        // ストリーム時刻に直した点列（重なり範囲の外の点も残す。範囲外は端点の値で一定）。
+        var points = envelope
+            .Select(b => (Time: b.TimeSeconds - envelopeStartLocalSeconds, b.Gain))
+            .ToList();
+
+        string expression;
+        if (points.Count == 1)
+        {
+            expression = F(points[0].Gain);
+        }
+        else
+        {
+            // 後ろから組み立て：最後の区間より後は末尾のゲインで一定。
+            expression = F(points[^1].Gain);
+            for (var i = points.Count - 2; i >= 0; i--)
+            {
+                var a = points[i];
+                var b = points[i + 1];
+                var span = b.Time - a.Time;
+                var segment = span <= 1e-9
+                    ? F(b.Gain)
+                    : $"{F(a.Gain)}+({F(b.Gain)}-{F(a.Gain)})*(t-{F(a.Time)})/{F(span)}";
+                expression = $"if(lt(t,{F(b.Time)}),{segment},{expression})";
+            }
+            // 最初の点より前は先頭のゲインで一定。
+            expression = $"if(lt(t,{F(points[0].Time)}),{F(points[0].Gain)},{expression})";
+        }
+        return $"volume='{expression}':eval=frame,";
+    }
+
+    /// <summary>
+    /// 速度（倍率）を ffmpeg の atempo の連鎖にする。atempo 1つは 0.5〜2.0 の範囲しか
+    /// 受け付けないため、範囲外は 2.0 / 0.5 を先に掛けて残りを最後に掛ける
+    /// （例：4.0 → atempo=2.000,atempo=2.000、0.1 → atempo=0.500,atempo=0.500,atempo=0.500,atempo=0.800）。
+    /// 等速（1.0）のときは空文字（フィルタを付けない）。末尾に "," を含む。
+    /// </summary>
+    internal static string AtempoChain(double speed)
+    {
+        var clamped = Clip.ClampSpeed(speed);
+        if (Math.Abs(clamped - 1.0) <= 1e-9)
+            return string.Empty;
+        var parts = new List<string>();
+        var remaining = clamped;
+        while (remaining > 2.0)
+        {
+            parts.Add("atempo=2.000");
+            remaining /= 2.0;
+        }
+        while (remaining < 0.5)
+        {
+            parts.Add("atempo=0.500");
+            remaining /= 0.5;
+        }
+        parts.Add($"atempo={remaining:F3}");
+        return string.Join(",", parts) + ",";
     }
 
     /// <summary>ノイズ除去の強さ（0.0〜1.0）を afftdn の nr（dB、1〜30）に写す。</summary>

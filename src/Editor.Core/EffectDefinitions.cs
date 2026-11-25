@@ -93,6 +93,9 @@ public static class EffectDefinitions
         new(EffectKind.Solarize, "ソラリゼーション", "しきい値", string.Empty, 0.5, 0, 0, 1, null, null, "しきい値(0-1)"),
         new(EffectKind.Kuwahara, "油絵風", "カーネル半径", "強さ", 3, 1, 1, 8, 0, 1, "カーネル半径(px)・強さ(0-1)"),
         new(EffectKind.TiltShift, "ティルトシフト", "ぼかし強さ", "合焦帯の幅", 0.5, 0.3, 0, 1, 0.1, 0.8, "ぼかし強さ(0-1)・合焦帯の幅"),
+        new(EffectKind.Sharpen, "シャープ", "強さ", "ぼかし半径", 1, 2, 0, 2, 1, 10, "強さ(0-2)・ぼかし半径(px)"),
+        new(EffectKind.Emboss, "エンボス", "強さ", "浮き彫りの距離", 0.8, 1, 0, 1, 1, 4, "強さ(0-1)・浮き彫りの距離(px)"),
+        new(EffectKind.Lut, "LUT（3D LUT）", "強さ", string.Empty, 1, 0, 0, 1, null, null, "強さ(0-1)・.cubeファイルで色変換（ファイル未指定・読込失敗時は無効）"),
     };
 
     /// <summary>全種類の定義。XAML のエフェクト選択 ComboBox の ItemsSource に使う（表示順＝この配列の順＝EffectKind の順）。</summary>

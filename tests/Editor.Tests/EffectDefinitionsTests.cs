@@ -24,12 +24,12 @@ public sealed class EffectDefinitionsTests
         EffectKind.ToneCurve
     };
 
-    /// <summary>全 EffectKind（既存26種＋新21種＝47種）に定義があること。</summary>
+    /// <summary>全 EffectKind（既存26種＋新21種＋新2種＋LUT＝50種）に定義があること。</summary>
     [Fact]
     public void AllKinds_HaveDefinitions()
     {
         var kinds = Enum.GetValues<EffectKind>();
-        Assert.Equal(47, kinds.Length);
+        Assert.Equal(50, kinds.Length);
         foreach (var kind in kinds)
         {
             var definition = EffectDefinitions.Get(kind);
@@ -40,7 +40,7 @@ public sealed class EffectDefinitionsTests
         }
     }
 
-    /// <summary>AllDefinitions が全47種を EffectKind の順で並べ、表示名・説明が空でなく重複しないこと（XAML の ComboBox はこの一覧を表示する）。</summary>
+    /// <summary>AllDefinitions が全50種を EffectKind の順で並べ、表示名・説明が空でなく重複しないこと（XAML の ComboBox はこの一覧を表示する）。</summary>
     [Fact]
     public void AllDefinitions_CoversAllKindsInEnumOrder()
     {
@@ -48,7 +48,7 @@ public sealed class EffectDefinitionsTests
         var kinds = Enum.GetValues<EffectKind>();
         Assert.Equal(kinds.Length, definitions.Count);
         Assert.Equal(kinds, definitions.Select(definition => definition.Kind));
-        Assert.Equal(47, definitions.Select(definition => definition.DisplayName).Distinct().Count());
+        Assert.Equal(50, definitions.Select(definition => definition.DisplayName).Distinct().Count());
         foreach (var definition in definitions)
         {
             Assert.False(string.IsNullOrWhiteSpace(definition.DisplayName));
