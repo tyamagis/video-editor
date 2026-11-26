@@ -123,16 +123,16 @@
                   <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
                       <Border x:Name="border" Background="{TemplateBinding Background}"
-                              Padding="{TemplateBinding Padding}" CornerRadius="3">
+                              Padding="{TemplateBinding Padding}" CornerRadius="2">
                         <ContentPresenter />
                       </Border>
                       <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                          <Setter TargetName="border" Property="Background" Value="#333333" />
+                          <Setter TargetName="border" Property="Background" Value="{StaticResource HoverBackground}" />
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
-                          <Setter TargetName="border" Property="Background" Value="#3D3D3D" />
-                          <Setter Property="Foreground" Value="#FFFFFF" />
+                          <Setter TargetName="border" Property="Background" Value="{StaticResource SelectionBackground}" />
+                          <Setter Property="Foreground" Value="{StaticResource AppForeground}" />
                         </Trigger>
                       </ControlTemplate.Triggers>
                     </ControlTemplate>

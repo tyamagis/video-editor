@@ -6,6 +6,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using Editor.Audio;
 using Editor.Core;
 using SkiaSharp;
@@ -16,6 +17,50 @@ namespace Editor.App.Controls;
 
 public partial class TimelineControl : UserControl
 {
+    // ---- ダークテーマのパレット（Themes/DarkTheme.xaml と共有する値）----
+    // 描画は SkiaSharp のため、テーマ辞書のブラシから色を取り出して SKColor 化し、
+    // 静的フィールドに一度だけキャッシュする（毎フレームの辞書引きはしない）。
+    // 辞書が無い／対象キーがブラシでない場合は16進フォールバックを使う。
+    private static SKColor ThemeColor(string key, byte r, byte g, byte b)
+    {
+        try
+        {
+            if (Application.Current?.Resources[key] is SolidColorBrush brush)
+            {
+                var c = brush.Color;
+                return new SKColor(c.R, c.G, c.B);
+            }
+        }
+        catch
+        {
+            // デザイナ等、Application が無い環境ではフォールバックを使う。
+        }
+        return new SKColor(r, g, b);
+    }
+
+    private static readonly SKColor ColorBackground = ThemeColor("AppBackground", 0x17, 0x18, 0x1A);
+    private static readonly SKColor ColorPanel = ThemeColor("PanelBackground", 0x1F, 0x20, 0x23);
+    private static readonly SKColor ColorBorder = ThemeColor("ControlBorder", 0x3A, 0x3C, 0x40);
+    private static readonly SKColor ColorForeground = ThemeColor("AppForeground", 0xF2, 0xF2, 0xF2);
+    private static readonly SKColor ColorMuted = ThemeColor("MutedForeground", 0xB4, 0xB6, 0xB8);
+    private static readonly SKColor ColorAccent = ThemeColor("AccentBrush", 0xFF, 0x2E, 0x7E);
+
+    // 辞書にキーが無い補助色はここで一元定義する（DarkTheme.xaml のパレット値と一致させる）。
+    private static readonly SKColor ColorStrongBorder = new(0x4B, 0x4D, 0x52);
+    private static readonly SKColor ColorDisabledText = new(0x6E, 0x70, 0x73);
+    private static readonly SKColor ColorAccentHover = new(0xFF, 0x5C, 0x99);
+    private static readonly SKColor ColorSelectionFill = new(0x4E, 0x24, 0x36);
+    private static readonly SKColor ColorGridMinor = new(0x2A, 0x2B, 0x2F);
+    private static readonly SKColor ColorWaveform = new(0xA8, 0xC8, 0xDC);
+
+    // クリップ種別ごとの塗り（暗背景で判別できるよう彩度を落とした暗色。同系色は従来色の色相を維持）。
+    private static readonly SKColor ColorClipVideo = new(0x33, 0x56, 0x6E);
+    private static readonly SKColor ColorClipAudio = new(0x2A, 0x5E, 0x4A);
+    private static readonly SKColor ColorClipText = new(0x66, 0x51, 0x2A);
+    private static readonly SKColor ColorClipImage = new(0x4E, 0x44, 0x70);
+    private static readonly SKColor ColorClipVisualization = new(0x5E, 0x33, 0x50);
+    private static readonly SKColor ColorClipOther = new(0x48, 0x48, 0x48);
+
     private const float HeaderHeight = 24f;
     private const float TrackHeight = 64f;
     private const float TrackGap = 4f;
@@ -235,11 +280,11 @@ public partial class TimelineControl : UserControl
     {
         var canvas = e.Surface.Canvas;
         var info = e.Info;
-        canvas.Clear(new SKColor(0x1E, 0x1E, 0x1E));
+        canvas.Clear(ColorBackground);
 
         if (Project is null)
         {
-            using var emptyPaint = CreateTextPaint(14, SKColors.Gray);
+            using var emptyPaint = CreateTextPaint(14, ColorMuted);
             canvas.DrawText("プロジェクトがありません", 12, 32, emptyPaint);
             return;
         }
@@ -259,8 +304,8 @@ public partial class TimelineControl : UserControl
         if (Project is null)
             return;
 
-        using var zonePaint = new SKPaint { Color = SKColors.White.WithAlpha(28) };
-        using var linePaint = new SKPaint { Color = new SKColor(0xE8, 0xA3, 0x3D), StrokeWidth = 2, IsAntialias = true };
+        using var zonePaint = new SKPaint { Color = ColorSelectionFill.WithAlpha(70) };
+        using var linePaint = new SKPaint { Color = ColorMuted, StrokeWidth = 2, IsAntialias = true };
 
         for (var i = 0; i < Project.Tracks.Count; i++)
         {
@@ -304,9 +349,12 @@ public partial class TimelineControl : UserControl
             canvas.DrawRect(0, 0, x0, height, dimPaint);
         if (x1 < width)
             canvas.DrawRect(x1, 0, width - x1, height, dimPaint);
+        // 範囲内は選択色で薄く染め、In/Out の縁はアクセントで示す。
+        using var rangePaint = new SKPaint { Color = ColorSelectionFill.WithAlpha(64) };
+        canvas.DrawRect(x0, 0, x1, height, rangePaint);
 
-        using var inPaint = new SKPaint { Color = SKColors.LightGreen, StrokeWidth = 2 };
-        using var outPaint = new SKPaint { Color = SKColors.OrangeRed, StrokeWidth = 2 };
+        using var inPaint = new SKPaint { Color = ColorAccent, StrokeWidth = 2 };
+        using var outPaint = new SKPaint { Color = ColorAccent, StrokeWidth = 2 };
         canvas.DrawLine(x0, 0, x0, height, inPaint);
         canvas.DrawLine(x1, 0, x1, height, outPaint);
     }
@@ -317,10 +365,11 @@ public partial class TimelineControl : UserControl
             return;
 
         var duration = Math.Max(Project.DurationSeconds, 10);
-        using var majorPaint = new SKPaint { Color = new SKColor(0x66, 0x66, 0x66), StrokeWidth = 1 };
-        using var minorPaint = new SKPaint { Color = new SKColor(0x3A, 0x3A, 0x3A), StrokeWidth = 1 };
-        using var textPaint = CreateTextPaint(11, SKColors.LightGray);
-        using var beatPaint = CreateTextPaint(10, new SKColor(0x99, 0x99, 0x99));
+        using var majorPaint = new SKPaint { Color = ColorBorder, StrokeWidth = 1 };
+        using var minorPaint = new SKPaint { Color = ColorGridMinor, StrokeWidth = 1 };
+        using var barPaint = new SKPaint { Color = ColorStrongBorder, StrokeWidth = 1 };
+        using var textPaint = CreateTextPaint(11, ColorMuted);
+        using var beatPaint = CreateTextPaint(10, ColorDisabledText);
 
         if (GridMode == GridMode.Beat)
         {
@@ -340,7 +389,7 @@ public partial class TimelineControl : UserControl
                     if (x > width)
                         break;
                     var isBar = BeatGridCalculator.IsBarStart(i);
-                    canvas.DrawLine(x, 0, x, HeaderHeight, isBar ? majorPaint : minorPaint);
+                    canvas.DrawLine(x, 0, x, HeaderHeight, isBar ? barPaint : minorPaint);
                     var bar = i / 4 + 1;
                     var beat = i % 4 + 1;
                     if (isBar)
@@ -374,7 +423,7 @@ public partial class TimelineControl : UserControl
                 if (x > width)
                     break;
                 var isBar = BeatGridCalculator.IsBarStart(i);
-                canvas.DrawLine(x, 0, x, HeaderHeight, isBar ? majorPaint : minorPaint);
+                canvas.DrawLine(x, 0, x, HeaderHeight, isBar ? barPaint : minorPaint);
                 var bar = i / 4 + 1;
                 var beat = i % 4 + 1;
                 if (isBar)
@@ -424,9 +473,9 @@ public partial class TimelineControl : UserControl
         if (Project is null)
             return;
 
-        using var lanePaint = new SKPaint { Color = new SKColor(0x2A, 0x2A, 0x2A) };
-        using var laneStroke = new SKPaint { Color = new SKColor(0x3A, 0x3A, 0x3A), Style = SKPaintStyle.Stroke };
-        using var textPaint = CreateTextPaint(12, SKColors.LightGray);
+        using var lanePaint = new SKPaint { Color = ColorPanel };
+        using var laneStroke = new SKPaint { Color = ColorBorder, Style = SKPaintStyle.Stroke };
+        using var textPaint = CreateTextPaint(12, ColorMuted);
 
         for (var i = 0; i < Project.Tracks.Count; i++)
         {
@@ -450,23 +499,23 @@ public partial class TimelineControl : UserControl
 
         var fill = clip.Kind switch
         {
-            ClipKind.Video => new SKColor(0x3A, 0x6E, 0xA5),
-            ClipKind.Audio => new SKColor(0x4A, 0x8F, 0x5D),
-            ClipKind.Text => new SKColor(0x8A, 0x6D, 0x3B),
-            ClipKind.Image => new SKColor(0x6A, 0x5A, 0x9E),
-            ClipKind.Visualization => new SKColor(0x7E, 0x57, 0xC2),
-            _ => new SKColor(0x55, 0x55, 0x55)
+            ClipKind.Video => ColorClipVideo,
+            ClipKind.Audio => ColorClipAudio,
+            ClipKind.Text => ColorClipText,
+            ClipKind.Image => ColorClipImage,
+            ClipKind.Visualization => ColorClipVisualization,
+            _ => ColorClipOther
         };
 
         using var fillPaint = new SKPaint { Color = fill, IsAntialias = true };
-        // 選択中は白く太く、複数選択中は琥珀色で枠を強調する。
+        // 選択中はアクセントで太く、複数選択中はアクセントの明色で枠を強調する（未選択との差を明確にする）。
         var isSelected = SelectedClip == clip;
         var isMultiSelected = _multiSelectedClips.Contains(clip);
         using var strokePaint = new SKPaint
         {
-            Color = isSelected ? SKColors.White
-                : isMultiSelected ? new SKColor(0xFF, 0xD1, 0x66)
-                : SKColors.White.WithAlpha(80),
+            Color = isSelected ? ColorAccent
+                : isMultiSelected ? ColorAccentHover
+                : ColorStrongBorder,
             StrokeWidth = isSelected || isMultiSelected ? 2.5f : 1f,
             Style = SKPaintStyle.Stroke,
             IsAntialias = true
@@ -477,7 +526,7 @@ public partial class TimelineControl : UserControl
         // グループ化されたクリップは上端にマゼンタの帯を引く（同じ帯同士が1グループ）。
         if (ClipGroups.IsGrouped(clip))
         {
-            using var groupPaint = new SKPaint { Color = new SKColor(0xFF, 0x2E, 0x88), IsAntialias = true };
+            using var groupPaint = new SKPaint { Color = ColorAccent, IsAntialias = true };
             canvas.DrawRect(new SKRect(rect.Left + 4, rect.Top + 2, rect.Right - 4, rect.Top + 5), groupPaint);
         }
 
@@ -486,7 +535,7 @@ public partial class TimelineControl : UserControl
 
         if (w > 30)
         {
-            using var textPaint = CreateTextPaint(12, SKColors.White);
+            using var textPaint = CreateTextPaint(12, ColorForeground);
             // 速度変更クリップは名前の後ろに倍率を出す（等速は従来どおり名前だけ）。
             var label = Math.Abs(clip.Speed - 1.0) > 1e-9
                 ? $"{clip.Name} ×{clip.Speed:0.##}"
@@ -539,7 +588,7 @@ public partial class TimelineControl : UserControl
 
         using var fillPaint = new SKPaint
         {
-            Color = SKColors.White.WithAlpha(110),
+            Color = ColorWaveform.WithAlpha(190),
             Style = SKPaintStyle.Fill,
             IsAntialias = true
         };
@@ -548,7 +597,7 @@ public partial class TimelineControl : UserControl
 
     /// <summary>
     /// マーカーを描く。ルーラーに下向きの三角の旗と名前ラベル、タイムライン全体に
-    /// 薄い縦線を引く。選択中のマーカーは琥珀色で目立たせる。
+    /// 薄い縦線を引く。選択中のマーカーはアクセント色を濃くして目立たせる。
     /// 名前ラベルは次のマーカーの旗や右端と重なりそうなときは描かない
     /// （ルーラーが文字で埋まるのを防ぐ）。
     /// </summary>
@@ -559,20 +608,20 @@ public partial class TimelineControl : UserControl
 
         using var linePaint = new SKPaint
         {
-            Color = new SKColor(0xFF, 0x2E, 0x88).WithAlpha(110),
+            Color = ColorAccent.WithAlpha(110),
             StrokeWidth = 1.5f,
             IsAntialias = true
         };
         using var selectedLinePaint = new SKPaint
         {
-            Color = new SKColor(0xFF, 0xD1, 0x66).WithAlpha(180),
+            Color = ColorAccent.WithAlpha(230),
             StrokeWidth = 2,
             IsAntialias = true
         };
-        using var flagPaint = new SKPaint { Color = new SKColor(0xFF, 0x2E, 0x88), IsAntialias = true };
-        using var selectedFlagPaint = new SKPaint { Color = new SKColor(0xFF, 0xD1, 0x66), IsAntialias = true };
-        using var textPaint = CreateTextPaint(11, new SKColor(0xFF, 0x6E, 0xB4));
-        using var selectedTextPaint = CreateTextPaint(11, new SKColor(0xFF, 0xD1, 0x66));
+        using var flagPaint = new SKPaint { Color = ColorAccentHover, IsAntialias = true };
+        using var selectedFlagPaint = new SKPaint { Color = ColorAccent, IsAntialias = true };
+        using var textPaint = CreateTextPaint(11, ColorAccentHover);
+        using var selectedTextPaint = CreateTextPaint(11, ColorForeground);
 
         var markers = Project.Markers; // 時刻順が不変条件。
         for (var i = 0; i < markers.Count; i++)
@@ -623,7 +672,7 @@ public partial class TimelineControl : UserControl
     private void DrawPlayhead(SKCanvas canvas, float height)
     {
         var x = (float)(PlayheadSeconds * PixelsPerSecond);
-        using var paint = new SKPaint { Color = SKColors.Red, StrokeWidth = 2 };
+        using var paint = new SKPaint { Color = ColorAccent, StrokeWidth = 2, IsAntialias = true };
         canvas.DrawLine(x, 0, x, height, paint);
     }
 

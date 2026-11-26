@@ -33,16 +33,20 @@ public partial class PreviewControl : UserControl
 
     public void InvalidatePreview() => PreviewElement?.InvalidateVisual();
 
+    // 映像エリアはステージとして読めるよう、ウィンドウ背景より暗い近黒にする（UI色。映像描画には影響しない）。
+    private static readonly SKColor StageBackground = new(0x0D, 0x0D, 0x0F);
+    private static readonly SKColor PlaceholderText = new(0xB4, 0xB6, 0xB8);
+
     private void OnPaintSurface(object sender, SKPaintSurfaceEventArgs e)
     {
         var canvas = e.Surface.Canvas;
-        canvas.Clear(SKColors.Black);
+        canvas.Clear(StageBackground);
 
         if (Bitmap is null)
         {
             using var paint = new SKPaint
             {
-                Color = SKColors.Gray,
+                Color = PlaceholderText,
                 TextSize = 16,
                 IsAntialias = true,
                 Typeface = SKTypeface.FromFamilyName("Yu Gothic UI") ?? SKTypeface.Default
