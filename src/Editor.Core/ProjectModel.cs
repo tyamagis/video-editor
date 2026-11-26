@@ -57,11 +57,26 @@ public sealed class VisualizationSettings
     public string ColorHex { get; set; } = "#22D3EE";
 
     // --- スペクトル用 ---
-    /// <summary>スペクトルの対象帯域の下限（Hz、1〜20000）。</summary>
-    public double LowHz { get; set; } = 20;
+    private double _lowHz = 20;
+    private double _highHz = 16000;
+    private double _gain = 1.0;
+    private double _lineWidth = 2.0;
+    private double _windowSeconds = 0.1;
+    private double _trailSeconds = 0.25;
 
-    /// <summary>スペクトルの対象帯域の上限（Hz、1〜20000）。</summary>
-    public double HighHz { get; set; } = 16000;
+    /// <summary>スペクトルの対象帯域の下限（Hz、1〜20000）。非有限値は既定値に戻す（UIのテキスト入力で "NaN" 等が入っても壊れないように）。</summary>
+    public double LowHz
+    {
+        get => _lowHz;
+        set => _lowHz = double.IsFinite(value) ? value : 20;
+    }
+
+    /// <summary>スペクトルの対象帯域の上限（Hz、1〜20000）。非有限値は既定値に戻す。</summary>
+    public double HighHz
+    {
+        get => _highHz;
+        set => _highHz = double.IsFinite(value) ? value : 16000;
+    }
 
     /// <summary>スペクトルの本数（4〜128）。</summary>
     public int BandCount { get; set; } = 32;
@@ -70,17 +85,33 @@ public sealed class VisualizationSettings
     public bool Logarithmic { get; set; } = true;
 
     // --- 全種共通・波形・リサジュー用 ---
-    /// <summary>高さ・振幅のゲイン（0.1〜4。1 が等倍）。スペクトルは棒の高さ、波形・リサジューは振幅に掛ける。</summary>
-    public double Gain { get; set; } = 1.0;
+    /// <summary>高さ・振幅のゲイン（0.1〜4。1 が等倍）。スペクトルは棒の高さ、波形・リサジューは振幅に掛ける。非有限値は既定値に戻す。</summary>
+    public double Gain
+    {
+        get => _gain;
+        set => _gain = double.IsFinite(value) ? value : 1.0;
+    }
 
-    /// <summary>線の太さ（px、0.5〜10）。波形・リサジューで使う。</summary>
-    public double LineWidth { get; set; } = 2.0;
+    /// <summary>線の太さ（px、0.5〜10）。波形・リサジューで使う。非有限値は既定値に戻す。</summary>
+    public double LineWidth
+    {
+        get => _lineWidth;
+        set => _lineWidth = double.IsFinite(value) ? value : 2.0;
+    }
 
-    /// <summary>波形の表示区間の長さ（秒、0.02〜1）。直前この長さ分の波形を描く。</summary>
-    public double WindowSeconds { get; set; } = 0.1;
+    /// <summary>波形の表示区間の長さ（秒、0.02〜1）。直前この長さ分の波形を描く。非有限値は既定値に戻す。</summary>
+    public double WindowSeconds
+    {
+        get => _windowSeconds;
+        set => _windowSeconds = double.IsFinite(value) ? value : 0.1;
+    }
 
-    /// <summary>リサジューの残像の長さ（秒、0〜1）。0 で残像なし。直前この長さ分の軌跡を、古いほど薄く描く。</summary>
-    public double TrailSeconds { get; set; } = 0.25;
+    /// <summary>リサジューの残像の長さ（秒、0〜1）。0 で残像なし。直前この長さ分の軌跡を、古いほど薄く描く。非有限値は既定値に戻す。</summary>
+    public double TrailSeconds
+    {
+        get => _trailSeconds;
+        set => _trailSeconds = double.IsFinite(value) ? value : 0.25;
+    }
 
     public VisualizationSettings Clone() => (VisualizationSettings)MemberwiseClone();
 
@@ -98,10 +129,11 @@ public sealed class VisualizationSettings
         return field is "Gain" or "LineWidth" or "WindowSeconds" or "TrailSeconds";
     }
 
-    public static double ClampGain(double value) => Math.Clamp(value, 0.1, 4);
-    public static double ClampLineWidth(double value) => Math.Clamp(value, 0.5, 10);
-    public static double ClampWindowSeconds(double value) => Math.Clamp(value, 0.02, 1);
-    public static double ClampTrailSeconds(double value) => Math.Clamp(value, 0, 1);
+    // Math.Clamp は NaN を素通しするため、NaN は各項目の既定値に戻す（Clip.ClampSpeed と同じ流儀）。
+    public static double ClampGain(double value) => double.IsNaN(value) ? 1.0 : Math.Clamp(value, 0.1, 4);
+    public static double ClampLineWidth(double value) => double.IsNaN(value) ? 2.0 : Math.Clamp(value, 0.5, 10);
+    public static double ClampWindowSeconds(double value) => double.IsNaN(value) ? 0.1 : Math.Clamp(value, 0.02, 1);
+    public static double ClampTrailSeconds(double value) => double.IsNaN(value) ? 0.25 : Math.Clamp(value, 0, 1);
 
     /// <summary>項目ごとのキーフレーム値の範囲に丸める（描画・評価側の最終防衛。UI側でも同じ範囲で丸める）。</summary>
     public static double ClampKeyframeValue(string field, double value) => field switch
@@ -249,8 +281,24 @@ public enum EffectKind
 public sealed class ClipEffect
 {
     public EffectKind Kind { get; set; }
-    public double Amount { get; set; }
-    public double Radius { get; set; }
+
+    private double _amount;
+    private double _radius;
+    private double _midtones;
+
+    /// <summary>主パラメータ。非有限値は 0 に戻す（UIのテキスト入力で "NaN" 等が入っても描画へ伝播しないように）。</summary>
+    public double Amount
+    {
+        get => _amount;
+        set => _amount = double.IsFinite(value) ? value : 0;
+    }
+
+    /// <summary>副パラメータ。非有限値は 0 に戻す。</summary>
+    public double Radius
+    {
+        get => _radius;
+        set => _radius = double.IsFinite(value) ? value : 0;
+    }
 
     /// <summary>
     /// 第3パラメータ（-1〜1 などが種類ごとに決まる。0 が変化なし）。
@@ -259,7 +307,11 @@ public sealed class ClipEffect
     /// 旧プロジェクトの JSON にはこの項目が無いが、読み込み時に 0 になる
     /// （System.Text.Json は欠けた項目を既定値で補う）ため、そのまま開ける。
     /// </summary>
-    public double Midtones { get; set; }
+    public double Midtones
+    {
+        get => _midtones;
+        set => _midtones = double.IsFinite(value) ? value : 0;
+    }
 
     public string KeyColorHex { get; set; } = "#00FF00";
 
@@ -270,6 +322,10 @@ public sealed class ClipEffect
     /// 旧プロジェクトの JSON にはこの項目が無いが、読み込み時に空文字列になる
     /// （System.Text.Json は欠けた項目を既定値で補う）ため、そのまま開ける。
     /// 空・ファイルが無い・パースできない場合は LUT は無効化され、元の色のまま描かれる。
+    /// メモリ上では常に絶対パスで持つ。プロジェクトファイルへの保存時だけ、
+    /// プロジェクトフォルダ以下にある LUT は相対パスで書かれ、読み込み時に
+    /// プロジェクトファイルの場所を基準に絶対パスへ戻される（ProjectStore.Save / Load）。
+    /// フォルダの外の LUT と、絶対パスで保存された旧プロジェクトは絶対パスのまま扱う。
     /// </summary>
     public string LutPath { get; set; } = string.Empty;
 
@@ -287,7 +343,10 @@ public sealed class ClipEffect
     public static double ClampAmount(EffectKind kind, double value)
     {
         var definition = EffectDefinitions.Get(kind);
-        return definition is null ? value : Math.Clamp(value, definition.AmountMin, definition.AmountMax);
+        // Math.Clamp は NaN を素通しするため、NaN は種類の既定値に戻す。
+        return definition is null ? value
+            : double.IsNaN(value) ? definition.DefaultAmount
+            : Math.Clamp(value, definition.AmountMin, definition.AmountMax);
     }
 
     /// <summary>種類ごとの Radius の範囲に丸める（Radius を使わない種類はそのまま返す）。範囲は EffectDefinitions の1テーブルが持つ。</summary>
@@ -296,6 +355,7 @@ public sealed class ClipEffect
         var definition = EffectDefinitions.Get(kind);
         return definition?.RadiusMin is null
             ? value
+            : double.IsNaN(value) ? definition.DefaultRadius
             : Math.Clamp(value, definition.RadiusMin.Value, definition.RadiusMax!.Value);
     }
 
@@ -305,6 +365,7 @@ public sealed class ClipEffect
         var definition = EffectDefinitions.Get(kind);
         return definition?.ThirdMin is null
             ? value
+            : double.IsNaN(value) ? definition.DefaultThird
             : Math.Clamp(value, definition.ThirdMin.Value, definition.ThirdMax!.Value);
     }
 
@@ -341,23 +402,54 @@ public sealed class AudioBinding
     /// <summary>音源にするクリップの Id（プロジェクト内の音声つきクリップ）。</summary>
     public string SourceClipId { get; set; } = string.Empty;
 
-    /// <summary>周波数帯の下限（Hz）。例：20。</summary>
-    public double LowHz { get; set; } = 20;
+    private double _lowHz = 20;
+    private double _highHz = 80;
+    private double _minValue = 1.0;
+    private double _maxValue = 1.12;
+    private double _gain = 1.0;
+    private double _threshold = 0.0;
 
-    /// <summary>周波数帯の上限（Hz）。例：80。</summary>
-    public double HighHz { get; set; } = 80;
+    /// <summary>周波数帯の下限（Hz）。例：20。非有限値は既定値に戻す（UIのテキスト入力で "NaN" 等が入っても MapValue へ伝播しないように）。</summary>
+    public double LowHz
+    {
+        get => _lowHz;
+        set => _lowHz = double.IsFinite(value) ? value : 20;
+    }
 
-    /// <summary>帯域エネルギー 0.0 のときの出力値。</summary>
-    public double MinValue { get; set; } = 1.0;
+    /// <summary>周波数帯の上限（Hz）。例：80。非有限値は既定値に戻す。</summary>
+    public double HighHz
+    {
+        get => _highHz;
+        set => _highHz = double.IsFinite(value) ? value : 80;
+    }
 
-    /// <summary>帯域エネルギー 1.0 のときの出力値。</summary>
-    public double MaxValue { get; set; } = 1.12;
+    /// <summary>帯域エネルギー 0.0 のときの出力値。非有限値は既定値に戻す。</summary>
+    public double MinValue
+    {
+        get => _minValue;
+        set => _minValue = double.IsFinite(value) ? value : 1.0;
+    }
 
-    /// <summary>感度。帯域エネルギーに掛ける倍率（0〜10）。1 が等倍。</summary>
-    public double Gain { get; set; } = 1.0;
+    /// <summary>帯域エネルギー 1.0 のときの出力値。非有限値は既定値に戻す。</summary>
+    public double MaxValue
+    {
+        get => _maxValue;
+        set => _maxValue = double.IsFinite(value) ? value : 1.12;
+    }
 
-    /// <summary>しきい値。これ以下の帯域エネルギーは 0 とみなす（0〜1）。</summary>
-    public double Threshold { get; set; } = 0.0;
+    /// <summary>感度。帯域エネルギーに掛ける倍率（0〜10）。1 が等倍。非有限値は既定値に戻す。</summary>
+    public double Gain
+    {
+        get => _gain;
+        set => _gain = double.IsFinite(value) ? value : 1.0;
+    }
+
+    /// <summary>しきい値。これ以下の帯域エネルギーは 0 とみなす（0〜1）。非有限値は既定値に戻す。</summary>
+    public double Threshold
+    {
+        get => _threshold;
+        set => _threshold = double.IsFinite(value) ? value : 0.0;
+    }
 
     /// <summary>反転する（音が大きいほど出力が小さくなる）。</summary>
     public bool Invert { get; set; }
@@ -407,8 +499,22 @@ public enum Interpolation
 /// <summary>1つのキーフレーム。時刻はクリップ先頭からの相対秒。</summary>
 public sealed class Keyframe
 {
-    public double TimeSeconds { get; set; }
-    public double Value { get; set; }
+    private double _timeSeconds;
+    private double _value;
+
+    /// <summary>クリップ先頭からの相対秒。非有限値は 0 に戻す（並べ替え・補間が NaN で壊れないように）。</summary>
+    public double TimeSeconds
+    {
+        get => _timeSeconds;
+        set => _timeSeconds = double.IsFinite(value) ? value : 0;
+    }
+
+    /// <summary>値。非有限値は 0 に戻す。</summary>
+    public double Value
+    {
+        get => _value;
+        set => _value = double.IsFinite(value) ? value : 0;
+    }
     public Interpolation Interpolation { get; set; } = Interpolation.Linear;
 
     public Keyframe() { }
@@ -540,25 +646,56 @@ public sealed class Clip
     /// <summary>素材ファイルへのパス。テキストクリップでは空。</summary>
     public string SourcePath { get; set; } = string.Empty;
 
-    /// <summary>タイムライン上の開始時刻（秒）。</summary>
-    public double StartSeconds { get; set; }
+    private double _startSeconds;
+    private double _durationSeconds;
+    private double _inPointSeconds;
+    private double _transitionDurationSeconds = 1.0;
+    private double _fontSize = 64;
+    private double _brightness;
+    private double _contrast = 1.0;
+    private double _noiseReductionStrength = 0.5;
+    private double _normalizeTargetDb = AudioNormalizer.DefaultTargetDb;
 
-    /// <summary>タイムライン上での長さ（秒）。</summary>
-    public double DurationSeconds { get; set; }
+    /// <summary>タイムライン上の開始時刻（秒）。非有限値は 0 に戻す（インスペクタのテキスト欄はこのプロパティへ直接バインドされるため、"NaN" 等が入ってもプロジェクト全体の長さ計算へ伝播しないように）。</summary>
+    public double StartSeconds
+    {
+        get => _startSeconds;
+        set => _startSeconds = double.IsFinite(value) ? value : 0;
+    }
 
-    /// <summary>素材内での開始位置（イン点、秒）。トリミングで変わる。</summary>
-    public double InPointSeconds { get; set; }
+    /// <summary>タイムライン上での長さ（秒）。非有限値は 0 に戻す。</summary>
+    public double DurationSeconds
+    {
+        get => _durationSeconds;
+        set => _durationSeconds = double.IsFinite(value) ? value : 0;
+    }
+
+    /// <summary>素材内での開始位置（イン点、秒）。トリミングで変わる。非有限値は 0 に戻す。</summary>
+    public double InPointSeconds
+    {
+        get => _inPointSeconds;
+        set => _inPointSeconds = double.IsFinite(value) ? value : 0;
+    }
 
     /// <summary>開始側のトランジション種別（前のクリップとの境界）。既定はなし。</summary>
     public TransitionKind TransitionKind { get; set; } = TransitionKind.None;
 
-    /// <summary>開始側トランジションの長さ（秒）。境界を中心に前後半分ずつ広がる。既定 1.0 秒。</summary>
-    public double TransitionDurationSeconds { get; set; } = 1.0;
+    /// <summary>開始側トランジションの長さ（秒）。境界を中心に前後半分ずつ広がる。既定 1.0 秒。非有限値は既定値に戻す（0 以下は評価側で「トランジション無し」として扱う既存の意味を保つ）。</summary>
+    public double TransitionDurationSeconds
+    {
+        get => _transitionDurationSeconds;
+        set => _transitionDurationSeconds = double.IsFinite(value) ? value : 1.0;
+    }
 
     // --- テキストクリップ用 ---
     public string Text { get; set; } = string.Empty;
     public string FontFamily { get; set; } = "Yu Gothic UI";
-    public double FontSize { get; set; } = 64;
+    /// <summary>フォントサイズ。非有限値は既定値 64 に戻す（描画側の TextSize が NaN にならないように）。</summary>
+    public double FontSize
+    {
+        get => _fontSize;
+        set => _fontSize = double.IsFinite(value) ? value : 64;
+    }
     public string FontColorHex { get; set; } = "#FFFFFFFF";
 
     /// <summary>テキストクリップのインアニメーション。Kind=None（既定）で無し。旧プロジェクト（JSON に項目無し）は Kind=None として開ける。</summary>
@@ -568,8 +705,19 @@ public sealed class Clip
     public TextAnimation AnimationOut { get; set; } = new();
 
     // --- 色調補正（フェーズ1：キーフレームなしの固定値。キーフレーム化は後段で） ---
-    public double Brightness { get; set; } // -1.0 .. 1.0
-    public double Contrast { get; set; } = 1.0; // 0.0 .. 2.0
+    /// <summary>明るさ（-1.0〜1.0）。非有限値は 0 に戻す。</summary>
+    public double Brightness
+    {
+        get => _brightness;
+        set => _brightness = double.IsFinite(value) ? value : 0;
+    }
+
+    /// <summary>コントラスト（0.0〜2.0）。非有限値は 1.0 に戻す。</summary>
+    public double Contrast
+    {
+        get => _contrast;
+        set => _contrast = double.IsFinite(value) ? value : 1.0;
+    }
 
     /// <summary>ブレンドモード（上のトラックのクリップが下とどう合成されるか）。既定は通常。</summary>
     public BlendMode BlendMode { get; set; } = BlendMode.Normal;
@@ -586,14 +734,22 @@ public sealed class Clip
     /// <summary>ノイズ除去を書き出し時に適用するか（フェーズ3）。プレビューでは反映されない。</summary>
     public bool NoiseReductionEnabled { get; set; }
 
-    /// <summary>ノイズ除去の強さ（0.0〜1.0）。書き出し時の afftdn の nr（dB）に写す。既定 0.5。</summary>
-    public double NoiseReductionStrength { get; set; } = 0.5;
+    /// <summary>ノイズ除去の強さ（0.0〜1.0）。書き出し時の afftdn の nr（dB）に写す。既定 0.5。非有限値は既定値に戻す。</summary>
+    public double NoiseReductionStrength
+    {
+        get => _noiseReductionStrength;
+        set => _noiseReductionStrength = double.IsFinite(value) ? value : 0.5;
+    }
 
     /// <summary>音声ノーマライズを適用するか（プレビュー・書き出し共通）。既定は無し。旧プロジェクト（JSON に項目無し）は false として開ける。</summary>
     public bool NormalizeAudioEnabled { get; set; }
 
-    /// <summary>ノーマライズの目標ピークレベル（dBFS、-30〜0）。既定 -1 dBFS。AudioNormalizer.ClampTargetDb で丸める。</summary>
-    public double NormalizeTargetDb { get; set; } = AudioNormalizer.DefaultTargetDb;
+    /// <summary>ノーマライズの目標ピークレベル（dBFS、-30〜0）。既定 -1 dBFS。AudioNormalizer.ClampTargetDb で丸める。非有限値は既定値に戻す。</summary>
+    public double NormalizeTargetDb
+    {
+        get => _normalizeTargetDb;
+        set => _normalizeTargetDb = double.IsFinite(value) ? value : AudioNormalizer.DefaultTargetDb;
+    }
 
     private double _audioFadeInSeconds;
     private double _audioFadeOutSeconds;
@@ -793,8 +949,14 @@ public sealed class Track
 /// </summary>
 public sealed class Marker
 {
-    /// <summary>タイムライン上の時刻（秒）。</summary>
-    public double TimeSeconds { get; set; }
+    private double _timeSeconds;
+
+    /// <summary>タイムライン上の時刻（秒）。非有限値は 0 に戻す（並べ替えが NaN で壊れないように）。</summary>
+    public double TimeSeconds
+    {
+        get => _timeSeconds;
+        set => _timeSeconds = double.IsFinite(value) ? value : 0;
+    }
 
     /// <summary>マーカーの名前（例：「サビ」「ドロップ」）。</summary>
     public string Name { get; set; } = string.Empty;
@@ -830,14 +992,31 @@ public sealed class EditorProject
     public int Height { get; set; } = 1080;
     public int FrameRate { get; set; } = 30;
 
-    /// <summary>BPM（手動設定。既定120）。拍グリッドの基準になる。</summary>
-    public double Bpm { get; set; } = 120.0;
+    private double _bpm = 120.0;
+    private double _exportInSeconds;
+    private double _exportOutSeconds;
+    private double _beatOffsetSeconds;
 
-    /// <summary>書き出し範囲の開始（秒）。0 は先頭。</summary>
-    public double ExportInSeconds { get; set; }
+    /// <summary>BPM（手動設定。既定120）。拍グリッドの基準になる。非有限値は既定値に戻す（拍グリッド計算 BeatGridCalculator は非有限の BPM で例外になるため）。</summary>
+    public double Bpm
+    {
+        get => _bpm;
+        set => _bpm = double.IsFinite(value) ? value : 120.0;
+    }
 
-    /// <summary>書き出し範囲の終了（秒）。0 または開始以下は末尾まで。</summary>
-    public double ExportOutSeconds { get; set; }
+    /// <summary>書き出し範囲の開始（秒）。0 は先頭。非有限値は 0 に戻す。</summary>
+    public double ExportInSeconds
+    {
+        get => _exportInSeconds;
+        set => _exportInSeconds = double.IsFinite(value) ? value : 0;
+    }
+
+    /// <summary>書き出し範囲の終了（秒）。0 または開始以下は末尾まで。非有限値は 0（末尾まで）に戻す。</summary>
+    public double ExportOutSeconds
+    {
+        get => _exportOutSeconds;
+        set => _exportOutSeconds = double.IsFinite(value) ? value : 0;
+    }
 
     /// <summary>書き出し範囲の開始（0〜全体の長さに丸める）。</summary>
     public double EffectiveExportInSeconds => Math.Clamp(ExportInSeconds, 0, DurationSeconds);
@@ -852,8 +1031,12 @@ public sealed class EditorProject
         }
     }
 
-    /// <summary>最初の拍の時刻（秒）。BPMと合わせて拍位置を決める。</summary>
-    public double BeatOffsetSeconds { get; set; }
+    /// <summary>最初の拍の時刻（秒）。BPMと合わせて拍位置を決める。非有限値は 0 に戻す。</summary>
+    public double BeatOffsetSeconds
+    {
+        get => _beatOffsetSeconds;
+        set => _beatOffsetSeconds = double.IsFinite(value) ? value : 0;
+    }
 
     public GridMode GridMode { get; set; } = GridMode.Frame;
 

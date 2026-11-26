@@ -394,6 +394,148 @@ public sealed class LutTests
         Assert.Equal(string.Empty, restored.Tracks[0].Clips[0].Effects[0].LutPath);
     }
 
+    // ---------- プロジェクト相対パス（ProjectStore.Save / Load） ----------
+
+    private static EditorProject ProjectWithLut(string lutPath)
+    {
+        var project = new EditorProject();
+        var track = project.AddTrack(TrackKind.Video, "ビデオ 1");
+        var clip = new Clip { Kind = ClipKind.Video, DurationSeconds = 5 };
+        clip.Effects.Add(new ClipEffect { Kind = EffectKind.Lut, Amount = 1, LutPath = lutPath });
+        track.Clips.Add(clip);
+        return project;
+    }
+
+    private static string StoredLutPath(string projectPath)
+        => ProjectStore.Deserialize(File.ReadAllText(projectPath)).Tracks[0].Clips[0].Effects[0].LutPath;
+
+    [Fact]
+    public void Save_LutInSubfolder_StoredRelative_LoadResolvesAbsolute()
+    {
+        using var temp = new TempDirectory();
+        var projectDir = Path.Combine(temp.Dir, "proj");
+        var lutDir = Path.Combine(projectDir, "luts");
+        Directory.CreateDirectory(lutDir);
+        var cubePath = Path.Combine(lutDir, "a.cube");
+        File.WriteAllText(cubePath, IdentityCubeText(2));
+        var projectPath = Path.Combine(projectDir, "p.veproj");
+        var project = ProjectWithLut(cubePath);
+
+        ProjectStore.Save(projectPath, project);
+
+        // 保存された JSON ではプロジェクトフォルダからの相対パスになる。
+        Assert.Equal(Path.Combine("luts", "a.cube"), StoredLutPath(projectPath));
+        // 呼び出し元のプロジェクトは絶対パスのまま変わらない。
+        Assert.Equal(cubePath, project.Tracks[0].Clips[0].Effects[0].LutPath);
+        // Load ではプロジェクトファイルの場所を基準に絶対パスへ解決される。
+        var loaded = ProjectStore.Load(projectPath);
+        Assert.Equal(cubePath, loaded.Tracks[0].Clips[0].Effects[0].LutPath);
+    }
+
+    [Fact]
+    public void Save_LutInProjectRoot_StoredAsFileNameOnly()
+    {
+        using var temp = new TempDirectory();
+        var cubePath = WriteCube(temp, "a.cube", IdentityCubeText(2));
+        var projectPath = temp.File("p.veproj");
+
+        ProjectStore.Save(projectPath, ProjectWithLut(cubePath));
+
+        Assert.Equal("a.cube", StoredLutPath(projectPath));
+        Assert.Equal(cubePath, ProjectStore.Load(projectPath).Tracks[0].Clips[0].Effects[0].LutPath);
+    }
+
+    [Fact]
+    public void Save_LutOutsideProjectDir_KeepsAbsolutePath()
+    {
+        using var temp = new TempDirectory();
+        var projectDir = Path.Combine(temp.Dir, "proj");
+        Directory.CreateDirectory(projectDir);
+        var otherDir = Path.Combine(temp.Dir, "other");
+        Directory.CreateDirectory(otherDir);
+        var cubePath = Path.Combine(otherDir, "a.cube");
+        File.WriteAllText(cubePath, IdentityCubeText(2));
+        var projectPath = Path.Combine(projectDir, "p.veproj");
+
+        ProjectStore.Save(projectPath, ProjectWithLut(cubePath));
+
+        // プロジェクトフォルダの外（相対にすると ".." を含む）は絶対パスのまま保存される。
+        Assert.Equal(cubePath, StoredLutPath(projectPath));
+        Assert.Equal(cubePath, ProjectStore.Load(projectPath).Tracks[0].Clips[0].Effects[0].LutPath);
+    }
+
+    [Fact]
+    public void Save_Load_Save_RelativePathIsStable()
+    {
+        using var temp = new TempDirectory();
+        var lutDir = Path.Combine(temp.Dir, "luts");
+        Directory.CreateDirectory(lutDir);
+        var cubePath = Path.Combine(lutDir, "a.cube");
+        File.WriteAllText(cubePath, IdentityCubeText(2));
+        var projectPath = temp.File("p.veproj");
+
+        ProjectStore.Save(projectPath, ProjectWithLut(cubePath));
+        ProjectStore.Save(projectPath, ProjectStore.Load(projectPath));
+
+        // 読み込んで保存し直しても相対パスのまま（二重に相対化・絶対化されない）。
+        Assert.Equal(Path.Combine("luts", "a.cube"), StoredLutPath(projectPath));
+        Assert.Equal(cubePath, ProjectStore.Load(projectPath).Tracks[0].Clips[0].Effects[0].LutPath);
+    }
+
+    [Fact]
+    public void Load_RelativeLutPath_ResolvesAgainstProjectLocation()
+    {
+        using var temp = new TempDirectory();
+        var lutDir = Path.Combine(temp.Dir, "luts");
+        Directory.CreateDirectory(lutDir);
+        var cubePath = Path.Combine(lutDir, "a.cube");
+        File.WriteAllText(cubePath, IdentityCubeText(2));
+        var projectPath = temp.File("p.veproj");
+        // 相対パスで書かれたプロジェクトファイルを直接置く（Save を経由しない）。
+        File.WriteAllText(projectPath,
+            ProjectStore.Serialize(ProjectWithLut(Path.Combine("luts", "a.cube"))));
+
+        var loaded = ProjectStore.Load(projectPath);
+        var lutPath = loaded.Tracks[0].Clips[0].Effects[0].LutPath;
+        Assert.Equal(cubePath, lutPath);
+        Assert.True(CubeLut.TryLoad(lutPath, out _, out var error), error);
+    }
+
+    [Fact]
+    public void Load_AbsoluteLutPath_OldProject_LoadsUnchanged()
+    {
+        using var temp = new TempDirectory();
+        var cubePath = WriteCube(temp, "a.cube", IdentityCubeText(2));
+        var projectPath = temp.File("p.veproj");
+        // 旧プロジェクトの形（絶対パスで保存された JSON）を直接置く。
+        File.WriteAllText(projectPath, ProjectStore.Serialize(ProjectWithLut(cubePath)));
+
+        var loaded = ProjectStore.Load(projectPath);
+        var lutPath = loaded.Tracks[0].Clips[0].Effects[0].LutPath;
+        Assert.Equal(cubePath, lutPath);
+        Assert.True(CubeLut.TryLoad(lutPath, out _, out var error), error);
+    }
+
+    [Fact]
+    public void Load_RelativeLutPath_MissingFile_LoadsAndStaysDisabled()
+    {
+        using var temp = new TempDirectory();
+        var projectPath = temp.File("p.veproj");
+        File.WriteAllText(projectPath,
+            ProjectStore.Serialize(ProjectWithLut(Path.Combine("luts", "gone.cube"))));
+
+        // ファイルが無くても読み込みは成功し、パスは絶対パスへ解決される。
+        var loaded = ProjectStore.Load(projectPath);
+        var effect = loaded.Tracks[0].Clips[0].Effects[0];
+        Assert.Equal(Path.Combine(temp.Dir, "luts", "gone.cube"), effect.LutPath);
+        Assert.False(File.Exists(effect.LutPath));
+        Assert.False(CubeLut.TryLoad(effect.LutPath, out _, out _));
+        // 従来通り LUT は無効化され、元の色のまま描かれる。
+        using var src = BuildFlat(100, 150, 200);
+        using var dst = LutEffect.ApplyLut(src, effect);
+        Assert.Equal(new SKColor(100, 150, 200), dst.GetPixel(8, 8));
+    }
+
     // ---------- TimelineFrameRenderer 経由の配線 ----------
 
     private sealed class PatternFrameSource : IVideoFrameSource

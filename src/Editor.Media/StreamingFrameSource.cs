@@ -12,6 +12,11 @@
 // 毎回「巻き戻し」になって張り直し（＝単発抽出並みに遅い）だった。そこで、後退する
 // 要求が検出されたら、要求時刻を含む一定区間（チャンク）を1回の ffmpeg 起動で
 // まとめてデコードしてメモリにキャッシュし、以後は区間内をキャッシュから返す。
+// 大きく後退するスクラブ（1ステップが上限超）でも、後退が続いていると分かった時点で
+// チャンク読み込みに切り替える（単発の大きなシークでは読み込まない。ShouldLoadChunk 参照）。
+// VFR 素材では「フレーム番号 = 時刻 × fps」の等間隔前提が成り立たず、チャンク内の
+// フレーム対応が時刻からずれていくため、チャンクキャッシュを使わない（毎回シーク
+// し直す従来経路は ffmpeg が PTS で探すので時刻どおりのフレームが返る）。
 // チャンクはフレーム番号で揃え（開始フレーム番号はチャンク長の倍数）、デコード開始は
 // 半フレーム分だけ手前にずらす。これにより、チャンク内フレームの画素は「その時刻へ
 // 直接シークして最初に返るフレーム」と一致する（テストで担保する）。
@@ -56,8 +61,17 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
     private const int MinChunkFrames = 4;
     private const int MaxChunkFrames = 120;
 
-    /// <summary>後退とみなす最大のステップ幅（秒）。これより大きく戻るのはシーク扱いで従来経路を使う。</summary>
+    /// <summary>即チャンク読み込みの対象とする最大のステップ幅（秒）。これより大きな後退は、続いている場合のみ対象になる（ShouldLoadChunk 参照）。</summary>
     private const double MaxReverseStepSeconds = 1.5;
+
+    /// <summary>
+    /// 大きな後退ステップでもチャンク読み込みに切り替える、連続後退の回数。
+    /// スクラブでは1ステップが MaxReverseStepSeconds を超え続けるが、後退が
+    /// この回数続いたら「逆方向への移動中」とみなしてチャンクを読み込む。
+    /// 単発の大きなシーク（後退が続かない）では読み込まないので、通常シークの
+    /// 応答は従来どおり。
+    /// </summary>
+    private const int SustainedBackwardStreak = 3;
 
     /// <summary>チャンクキャッシュ（キー：素材パス＋横幅）。</summary>
     private readonly Dictionary<(string SourcePath, int MaxWidth), Chunk> _chunks = new();
@@ -67,6 +81,9 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
 
     /// <summary>キーごとの直近の要求時刻。後退ステップの検出に使う。</summary>
     private readonly Dictionary<(string SourcePath, int MaxWidth), double> _lastRequested = new();
+
+    /// <summary>キーごとの連続後退回数（前進・静止で 0 に戻る）。大きな後退スクラブの検出に使う。</summary>
+    private readonly Dictionary<(string SourcePath, int MaxWidth), int> _backwardStreak = new();
 
     /// <summary>テスト用：現在のチャンクキャッシュの件数と総バイト数。</summary>
     internal (int Count, long Bytes) ChunkCacheStats
@@ -101,31 +118,34 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
             var outHeight = Math.Max(2, (int)Math.Round(info.Height * (double)maxWidth / info.Width));
             var frameBytes = maxWidth * outHeight * 4;
 
+            // VFR 素材ではチャンク内のフレーム対応（番号 = 時刻 × fps）が成り立たず
+            // 時刻からずれたフレームを返してしまうため、チャンクキャッシュを使わない。
+            var useChunkCache = !info.IsVariableFrameRate;
+
             // 逆再生用チャンクキャッシュ：区間内なら即返す。
             // チャンクから返すときは、その素材の常駐セッションを捨てる。セッションの
             // 読み進み位置は現在の要求時刻と無関係になっているため、残しておくと
             // 次の順方向要求で古い位置のフレームを返しかねない。
-            if (TryServeFromChunk(key, timeSeconds, fps, out var chunkFrame))
+            if (useChunkCache && TryServeFromChunk(key, timeSeconds, fps, out var chunkFrame))
             {
                 DisposeSession(key);
-                _lastRequested[key] = timeSeconds;
+                NoteRequest(key, timeSeconds);
                 return chunkFrame;
             }
 
             // 後退ステップ（逆再生の連続要求）を検出したら、区間をまとめて読み込む。
-            var isReverseStep = _lastRequested.TryGetValue(key, out var prevRequested)
-                && timeSeconds < prevRequested - 1e-6
-                && timeSeconds >= prevRequested - MaxReverseStepSeconds;
-            if (isReverseStep
+            // 大きな後退でも、後退が続いている（スクラブ中）なら読み込む。
+            var stepBack = NoteRequest(key, timeSeconds);
+            var isReverseStep = stepBack is { } back && ShouldLoadChunk(back, _backwardStreak[key]);
+            if (useChunkCache
+                && isReverseStep
                 && await LoadChunkAsync(sourcePath, key, timeSeconds, maxWidth, outHeight, frameBytes, fps, ct)
                     .ConfigureAwait(false)
                 && TryServeFromChunk(key, timeSeconds, fps, out chunkFrame))
             {
                 DisposeSession(key); // 上のチャンク返却と同じ理由でセッションを捨てる。
-                _lastRequested[key] = timeSeconds;
                 return chunkFrame;
             }
-            _lastRequested[key] = timeSeconds;
 
             if (!_sessions.TryGetValue(key, out var session) || !CanServe(session, timeSeconds))
                 session = await StartSessionAsync(sourcePath, timeSeconds, maxWidth, outHeight, frameBytes, ct)
@@ -271,6 +291,41 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
     {
         var effective = Math.Round(timeSeconds, 3);
         return Math.Max(0, (long)Math.Ceiling((effective - 1e-9) * fps));
+    }
+
+    /// <summary>
+    /// 要求を記録し、直前の要求からの後退幅（秒）を返す（初回は null）。
+    /// 連続後退回数（_backwardStreak）もここで更新する：後退で +1、前進・静止で 0。
+    /// </summary>
+    private double? NoteRequest((string SourcePath, int MaxWidth) key, double timeSeconds)
+    {
+        double? stepBack = null;
+        if (_lastRequested.TryGetValue(key, out var prevRequested))
+        {
+            stepBack = prevRequested - timeSeconds;
+            _backwardStreak[key] = stepBack > 1e-6
+                ? (_backwardStreak.TryGetValue(key, out var streak) ? streak : 0) + 1
+                : 0;
+        }
+        else
+        {
+            _backwardStreak[key] = 0;
+        }
+        _lastRequested[key] = timeSeconds;
+        return stepBack;
+    }
+
+    /// <summary>
+    /// 後退幅と連続後退回数から、チャンク読み込みを始めるべきか判定する。
+    /// 小さな後退（逆再生の通常ステップ）は即読み込む。大きな後退は、単発なら
+    /// 通常シークの方が速いので読み込まず、後退が続いている（スクラブ中）と
+    /// 分かった時点で読み込む。
+    /// </summary>
+    internal static bool ShouldLoadChunk(double stepBackSeconds, int backwardStreak)
+    {
+        if (!double.IsFinite(stepBackSeconds) || stepBackSeconds <= 1e-6)
+            return false;
+        return stepBackSeconds <= MaxReverseStepSeconds || backwardStreak >= SustainedBackwardStreak;
     }
 
     /// <summary>チャンクキャッシュから返せれば true（終端より後なら frame は null で true）。</summary>
@@ -515,6 +570,7 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         _chunks.Clear();
         _chunkOrder.Clear();
         _lastRequested.Clear();
+        _backwardStreak.Clear();
         _gate.Dispose();
     }
 

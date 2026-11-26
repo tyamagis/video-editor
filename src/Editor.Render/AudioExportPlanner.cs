@@ -187,50 +187,17 @@ internal sealed class AudioExportPlanner
 
     /// <summary>
     /// 包絡のブレークポイント列を ffmpeg の volume フィルタ（eval=frame）にする。
-    /// 式はブレークポイント間の線形補間（Core の EvaluateBreakpoints と同じ）を
-    /// ネストした if で表す。t はストリーム時刻（asetpts 後）で、ブレークポイントの
-    /// 時刻から envelopeStartLocalSeconds（重なり部分のクリップ相対開始秒）を引いて
-    /// そろえる。包絡が無い・全て等倍なら空文字（フィルタを付けない）。
-    /// 式中のカンマはフィルタ引数の引用符（'…'）で保護する。
+    /// 変換の本体は Core の AudioGainEnvelope.BuildVolumeFilter（単一クリップ書き出しと
+    /// 同じ変換を読み、両経路の結果を一致させる）。ここではフィルタチェーンの
+    /// 途中に埋めるための末尾カンマだけを付ける。t はストリーム時刻（asetpts 後）で、
+    /// ブレークポイントの時刻から envelopeStartLocalSeconds（重なり部分の
+    /// クリップ相対開始秒）を引いてそろえる。包絡が無い・全て等倍なら空文字。
     /// </summary>
     internal static string EnvelopeVolumeFilter(
         IReadOnlyList<GainBreakpoint>? envelope, double envelopeStartLocalSeconds = 0)
     {
-        if (envelope is null || envelope.Count == 0)
-            return string.Empty;
-        if (envelope.All(b => Math.Abs(b.Gain - 1.0) <= 1e-9))
-            return string.Empty;
-
-        var inv = System.Globalization.CultureInfo.InvariantCulture;
-        string F(double v) => v.ToString("F4", inv);
-        // ストリーム時刻に直した点列（重なり範囲の外の点も残す。範囲外は端点の値で一定）。
-        var points = envelope
-            .Select(b => (Time: b.TimeSeconds - envelopeStartLocalSeconds, b.Gain))
-            .ToList();
-
-        string expression;
-        if (points.Count == 1)
-        {
-            expression = F(points[0].Gain);
-        }
-        else
-        {
-            // 後ろから組み立て：最後の区間より後は末尾のゲインで一定。
-            expression = F(points[^1].Gain);
-            for (var i = points.Count - 2; i >= 0; i--)
-            {
-                var a = points[i];
-                var b = points[i + 1];
-                var span = b.Time - a.Time;
-                var segment = span <= 1e-9
-                    ? F(b.Gain)
-                    : $"{F(a.Gain)}+({F(b.Gain)}-{F(a.Gain)})*(t-{F(a.Time)})/{F(span)}";
-                expression = $"if(lt(t,{F(b.Time)}),{segment},{expression})";
-            }
-            // 最初の点より前は先頭のゲインで一定。
-            expression = $"if(lt(t,{F(points[0].Time)}),{F(points[0].Gain)},{expression})";
-        }
-        return $"volume='{expression}':eval=frame,";
+        var filter = AudioGainEnvelope.BuildVolumeFilter(envelope, envelopeStartLocalSeconds);
+        return filter.Length == 0 ? string.Empty : filter + ",";
     }
 
     /// <summary>

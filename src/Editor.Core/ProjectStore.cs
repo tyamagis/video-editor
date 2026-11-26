@@ -13,12 +13,21 @@ public static class ProjectStore
     /// <summary>
     /// プロジェクトを保存する。一時ファイル経由の原子的な置換で書くため、
     /// 保存途中でクラッシュしても本ファイルが半端な内容になることはない。
-    /// 呼び出し元のプロジェクトは変えない（Version の書き込みはシリアライズ用のコピー側で行う）。
+    /// 呼び出し元のプロジェクトは変えない（Version の書き込みと LUT パスの相対化は
+    /// シリアライズ用のコピー側で行う）。
+    /// LUT ファイル（.cube）がプロジェクトファイルと同じフォルダ以下にある場合は、
+    /// LutPath をプロジェクトファイルからの相対パスで保存する（プロジェクトフォルダごと
+    /// 移動しても LUT を辿れるようにするため）。フォルダの外にある場合は絶対パスのまま。
+    /// メモリ上のプロジェクト（と Serialize / Deserialize）は常に絶対パスで扱う。
     /// </summary>
     public static void Save(string path, EditorProject project)
     {
+        // JSON 往復で深いコピーを作り、コピー側だけ LUT パスを相対化する
+        // （WithVersion の浅いコピーではクリップ・エフェクトを共有してしまうため）。
+        var copy = Deserialize(Serialize(project));
+        RelativizeLutPaths(copy, ProjectDirectoryOf(path));
         var json = JsonSerializer.Serialize(
-            project.WithVersion(EditorProject.CurrentVersion), JsonDefaults.Indented);
+            copy.WithVersion(EditorProject.CurrentVersion), JsonDefaults.Indented);
         AtomicFile.WriteAllText(path, json);
     }
 
@@ -36,8 +45,19 @@ public static class ProjectStore
         => JsonSerializer.Deserialize<EditorProject>(json, JsonDefaults.Indented)
             ?? throw new InvalidDataException("プロジェクトを復元できませんでした。");
 
+    /// <summary>
+    /// プロジェクトファイルを読む。LutPath が相対パスで保存されていたら、
+    /// プロジェクトファイルのあるフォルダを基準に絶対パスへ解決する
+    /// （メモリ上では常に絶対パスで扱う）。絶対パスで保存された旧プロジェクトは
+    /// そのまま読める。解決した先にファイルが無くても読み込みは成功し、
+    /// LUT は従来通り無効化される（描画・インスペクタ側の既存の扱い）。
+    /// </summary>
     public static EditorProject Load(string path)
-        => LoadFromJson(File.ReadAllText(path));
+    {
+        var project = LoadFromJson(File.ReadAllText(path));
+        ResolveLutPaths(project, ProjectDirectoryOf(path));
+        return project;
+    }
 
     /// <summary>
     /// JSON 文字列からプロジェクトを復元する（テンプレート内のプロジェクト読み込み用）。
@@ -82,6 +102,70 @@ public static class ProjectStore
 
         project.Version = EditorProject.CurrentVersion;
         return project;
+    }
+
+    /// <summary>プロジェクトファイルのあるフォルダの絶対パス（保存・読み込みの相対基準）。</summary>
+    private static string ProjectDirectoryOf(string projectPath)
+        => Path.GetDirectoryName(Path.GetFullPath(projectPath)) ?? string.Empty;
+
+    /// <summary>LUTエフェクトをすべて列挙する（トラック→クリップ→エフェクトの順）。</summary>
+    private static IEnumerable<ClipEffect> LutEffects(EditorProject project)
+        => project.Tracks
+            .SelectMany(track => track.Clips)
+            .SelectMany(clip => clip.Effects)
+            .Where(effect => effect.Kind == EffectKind.Lut);
+
+    /// <summary>保存用：プロジェクトフォルダ以下にある LUT のパスを相対パスに書き換える。</summary>
+    private static void RelativizeLutPaths(EditorProject project, string projectDirectory)
+    {
+        foreach (var effect in LutEffects(project))
+            effect.LutPath = ToProjectRelativePath(projectDirectory, effect.LutPath);
+    }
+
+    /// <summary>読み込み用：相対パスの LUT をプロジェクトフォルダ基準の絶対パスに解決する。</summary>
+    private static void ResolveLutPaths(EditorProject project, string projectDirectory)
+    {
+        foreach (var effect in LutEffects(project))
+            effect.LutPath = ToProjectAbsolutePath(projectDirectory, effect.LutPath);
+    }
+
+    /// <summary>
+    /// LUT の絶対パスを、プロジェクトフォルダからの相対パスにする。
+    /// 対象外（未指定・既に相対・フォルダの外・別ドライブ等で共通の基準が無い）は
+    /// そのまま返す。相対化に失敗しても保存自体は止めない（絶対パスのまま保存する）。
+    /// </summary>
+    private static string ToProjectRelativePath(string projectDirectory, string lutPath)
+    {
+        if (string.IsNullOrWhiteSpace(lutPath) || !Path.IsPathFullyQualified(lutPath))
+            return lutPath;
+        string relative;
+        try
+        {
+            relative = Path.GetRelativePath(projectDirectory, lutPath);
+        }
+        catch (Exception)
+        {
+            return lutPath;
+        }
+        // フォルダの外（".." で始まる）・共通の基準が無く絶対のまま返ってきた場合は相対化しない。
+        if (Path.IsPathFullyQualified(relative))
+            return lutPath;
+        var firstSegment = relative
+            .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+            .Split(Path.DirectorySeparatorChar)[0];
+        return firstSegment == ".." ? lutPath : relative;
+    }
+
+    /// <summary>
+    /// LUT の相対パスを、プロジェクトフォルダを基準にした絶対パスに解決する。
+    /// 未指定・既に絶対の場合はそのまま返す。ファイルの有無は見ない
+    /// （無い場合の無効化は描画・インスペクタ側の既存の扱いに任せる）。
+    /// </summary>
+    private static string ToProjectAbsolutePath(string projectDirectory, string lutPath)
+    {
+        if (string.IsNullOrWhiteSpace(lutPath) || Path.IsPathFullyQualified(lutPath))
+            return lutPath;
+        return Path.GetFullPath(Path.Combine(projectDirectory, lutPath));
     }
 
     /// <summary>

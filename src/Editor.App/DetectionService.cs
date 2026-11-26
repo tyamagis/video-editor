@@ -297,6 +297,8 @@ public sealed class DetectionService : INotifyPropertyChanged
         get => _silenceThresholdDb;
         set
         {
+            if (!double.IsFinite(value))
+                return; // "NaN" は Math.Clamp を素通しするため、有限でない値は無視する。
             var clamped = Math.Clamp(value, -90, -10);
             if (Math.Abs(_silenceThresholdDb - clamped) < 1e-9)
                 return;
@@ -311,6 +313,8 @@ public sealed class DetectionService : INotifyPropertyChanged
         get => _silenceMinSeconds;
         set
         {
+            if (!double.IsFinite(value))
+                return; // "NaN" は Math.Clamp を素通しするため、有限でない値は無視する。
             var clamped = Math.Clamp(value, 0.1, 10);
             if (Math.Abs(_silenceMinSeconds - clamped) < 1e-9)
                 return;
@@ -325,6 +329,8 @@ public sealed class DetectionService : INotifyPropertyChanged
         get => _silenceMarginSeconds;
         set
         {
+            if (!double.IsFinite(value))
+                return; // "NaN" は Math.Clamp を素通しするため、有限でない値は無視する。
             var clamped = Math.Clamp(value, 0, 1);
             if (Math.Abs(_silenceMarginSeconds - clamped) < 1e-9)
                 return;

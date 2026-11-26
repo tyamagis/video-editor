@@ -263,6 +263,59 @@ public static class AudioGainEnvelope
             .ToList();
     }
 
+    /// <summary>
+    /// ブレークポイント列を ffmpeg の volume フィルタ（eval=frame）にする（末尾カンマなし）。
+    /// 式はブレークポイント間の線形補間（EvaluateBreakpoints と同じ）をネストした if で表す。
+    /// t はストリーム時刻で、ブレークポイントの時刻から streamStartLocalSeconds
+    /// （ストリーム時刻 0 に対応するクリップ相対秒）を引いてそろえる。
+    /// 包絡が無い・全て等倍なら空文字（フィルタを付けない）。
+    /// 式中のカンマはフィルタ引数の引用符（'…'）で保護する。
+    /// 数値書式は全て不変カルチャ。非有限のオフセットは 0 として扱い、
+    /// 非有限の時刻・ゲインを持つ点は落とす（壊れた式を ffmpeg に渡さないため）。
+    /// タイムライン書き出し（Editor.Render）と単一クリップ書き出し（Editor.Media）が
+    /// 同じ変換を読むことで、両経路のフェード／ダッキングの効き方が一致する。
+    /// </summary>
+    public static string BuildVolumeFilter(
+        IReadOnlyList<GainBreakpoint>? breakpoints, double streamStartLocalSeconds = 0)
+    {
+        if (breakpoints is null || breakpoints.Count == 0)
+            return string.Empty;
+        var offset = double.IsFinite(streamStartLocalSeconds) ? streamStartLocalSeconds : 0;
+        var points = breakpoints
+            .Where(b => double.IsFinite(b.TimeSeconds) && double.IsFinite(b.Gain))
+            .Select(b => (Time: b.TimeSeconds - offset, b.Gain))
+            .ToList();
+        if (points.Count == 0 || points.All(p => Math.Abs(p.Gain - 1.0) <= 1e-9))
+            return string.Empty;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        string F(double v) => v.ToString("F4", inv);
+
+        string expression;
+        if (points.Count == 1)
+        {
+            expression = F(points[0].Gain);
+        }
+        else
+        {
+            // 後ろから組み立て：最後の区間より後は末尾のゲインで一定。
+            expression = F(points[^1].Gain);
+            for (var i = points.Count - 2; i >= 0; i--)
+            {
+                var a = points[i];
+                var b = points[i + 1];
+                var span = b.Time - a.Time;
+                var segment = span <= 1e-9
+                    ? F(b.Gain)
+                    : $"{F(a.Gain)}+({F(b.Gain)}-{F(a.Gain)})*(t-{F(a.Time)})/{F(span)}";
+                expression = $"if(lt(t,{F(b.Time)}),{segment},{expression})";
+            }
+            // 最初の点より前は先頭のゲインで一定。
+            expression = $"if(lt(t,{F(points[0].Time)}),{F(points[0].Gain)},{expression})";
+        }
+        return $"volume='{expression}':eval=frame";
+    }
+
     /// <summary>ブレークポイント列を線形補間で評価する（時刻はクリップ相対秒）。列の外側は端点の値。</summary>
     public static double EvaluateBreakpoints(IReadOnlyList<GainBreakpoint> breakpoints, double localSeconds)
     {

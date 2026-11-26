@@ -34,8 +34,9 @@ public static class AudioNormalizer
     /// <summary>ゲインの上限（線形倍率。MaxGainDb と同じ）。</summary>
     public const double MaxGainLinear = 100.0;
 
-    /// <summary>目標レベルを -30〜0 dBFS の範囲に丸める。</summary>
-    public static double ClampTargetDb(double value) => Math.Clamp(value, MinTargetDb, MaxTargetDb);
+    /// <summary>目標レベルを -30〜0 dBFS の範囲に丸める（NaN は既定値。Math.Clamp は NaN を素通しするため）。</summary>
+    public static double ClampTargetDb(double value)
+        => double.IsNaN(value) ? DefaultTargetDb : Math.Clamp(value, MinTargetDb, MaxTargetDb);
 
     /// <summary>サンプルピーク（線形振幅、0〜）を dBFS に変換する。無音（0以下）は -∞。</summary>
     public static double PeakToDb(double peakLinear)

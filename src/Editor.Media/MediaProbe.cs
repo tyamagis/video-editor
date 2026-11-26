@@ -31,16 +31,23 @@ public sealed class MediaProbe : IMediaProbe
             var analysis = await FFProbe.AnalyseAsync(path).ConfigureAwait(false);
             var video = analysis.PrimaryVideoStream;
             var audio = analysis.PrimaryAudioStream;
+            // FFMpegCore の FrameRate は r_frame_rate（最大レート）、AvgFrameRate が
+            // avg_frame_rate（平均レート）。CFR では両者は一致するが、VFR では
+            // r_frame_rate が実フレーム密度から大きく外れるため、代表レートには
+            // 平均レートを使う（取れなければ最大レートにフォールバック）。
+            var avgFrameRate = video?.AvgFrameRate ?? 0;
+            var realFrameRate = video?.FrameRate ?? 0;
             return new MediaInfo(
                 Path: path,
                 Duration: analysis.Duration,
                 Width: video?.Width ?? 0,
                 Height: video?.Height ?? 0,
-                FrameRate: video?.FrameRate ?? 0,
+                FrameRate: avgFrameRate > 0 ? avgFrameRate : realFrameRate,
                 HasVideo: video is not null,
                 HasAudio: audio is not null,
                 VideoCodec: video?.CodecName,
-                AudioCodec: audio?.CodecName);
+                AudioCodec: audio?.CodecName,
+                IsVariableFrameRate: DetectVariableFrameRate(avgFrameRate, realFrameRate));
         }
         catch (Exception ex) when (ex is not FileNotFoundException)
         {
@@ -70,6 +77,7 @@ public sealed class MediaProbe : IMediaProbe
         var width = 0;
         var height = 0;
         var frameRate = 0.0;
+        var avgFrameRate = 0.0;
         string? videoCodec = null;
         string? audioCodec = null;
         var hasVideo = false;
@@ -88,6 +96,8 @@ public sealed class MediaProbe : IMediaProbe
                     videoCodec = stream.GetProperty("codec_name").GetString();
                     if (stream.TryGetProperty("r_frame_rate", out var fpsElement))
                         frameRate = ParseFrameRate(fpsElement.GetString());
+                    if (stream.TryGetProperty("avg_frame_rate", out var avgFpsElement))
+                        avgFrameRate = ParseFrameRate(avgFpsElement.GetString());
                 }
                 else if (codecType == "audio" && !hasAudio)
                 {
@@ -97,7 +107,25 @@ public sealed class MediaProbe : IMediaProbe
             }
         }
 
-        return new MediaInfo(path, duration, width, height, frameRate, hasVideo, hasAudio, videoCodec, audioCodec);
+        // 主系（FFMpegCore）と揃え、代表レートは平均レート（無ければ最大レート）。
+        var effectiveFrameRate = avgFrameRate > 0 ? avgFrameRate : frameRate;
+        return new MediaInfo(path, duration, width, height, effectiveFrameRate, hasVideo, hasAudio,
+            videoCodec, audioCodec, DetectVariableFrameRate(avgFrameRate, frameRate));
+    }
+
+    /// <summary>
+    /// 平均フレームレートと最大フレームレート（r_frame_rate）が食い違えば VFR とみなす。
+    /// CFR では両者は一致する。2% までの差は、先頭・末尾フレームの切り捨て等による
+    /// 平均レートの微小なずれとして許容する（その程度のずれでは逆再生の
+    /// フレーム対応も実用上ずれない）。どちらかが不明（0・非有限）なら CFR 扱い。
+    /// </summary>
+    internal static bool DetectVariableFrameRate(double avgFrameRate, double realFrameRate)
+    {
+        if (!double.IsFinite(avgFrameRate) || !double.IsFinite(realFrameRate))
+            return false;
+        if (avgFrameRate <= 0 || realFrameRate <= 0)
+            return false;
+        return Math.Abs(realFrameRate - avgFrameRate) > 0.02 * Math.Max(realFrameRate, avgFrameRate);
     }
 
     /// <summary>

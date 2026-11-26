@@ -73,7 +73,8 @@ public partial class LyricsImportDialog : Window
     /// "3,5" が 35 になるのを防ぐため、InvariantCulture だけを使う）。
     /// </summary>
     private static bool TryParseSeconds(string text, out double value)
-        => double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+        => double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+            && double.IsFinite(value); // "NaN" / "Infinity" は数値として通ってしまうため弾く（Core の Validate と同じ条件）。
 
     private void ShowError(string message)
         => MessageBox.Show(this, message, "入力エラー", MessageBoxButton.OK, MessageBoxImage.Error);

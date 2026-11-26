@@ -26,6 +26,14 @@ public sealed class ExportService
     /// （-vf reverse / -af areverse。音声の無い素材でも -af areverse は無視され、失敗しない）。
     /// speed が 1.0 以外のとき、映像は setpts、音声は atempo（ピッチ保持）で速度を変え、
     /// 出力の長さは duration ÷ speed になる（タイムライン書き出しと同じ結果）。
+    /// audioFadeInSeconds / audioFadeOutSeconds（タイムライン秒、クリップのフェード設定）
+    /// が正のとき、音声フェードを適用する。包絡はタイムライン書き出しと同じ
+    /// Core の AudioGainEnvelope のブレークポイント列から同じ volume フィルタを
+    /// 組むため、プレビュー・タイムライン書き出し・単一クリップ書き出しで
+    /// フェードの効き方が一致する。ダッキングは適用しない：ダッキングは
+    /// プロジェクト内の別クリップ（トリガー）の鳴っている区間を必要とするが、
+    /// この経路はプロジェクトもトリガー解析（IAudioActivityProvider）も
+    /// 受け取らない単一素材の切り出しであり、対象外とする。
     /// </summary>
     public async Task ExportSingleClipAsync(
         string sourcePath,
@@ -36,7 +44,9 @@ public sealed class ExportService
         IProgress<double>? progress = null,
         CancellationToken ct = default,
         bool reverse = false,
-        double speed = 1.0)
+        double speed = 1.0,
+        double audioFadeInSeconds = 0,
+        double audioFadeOutSeconds = 0)
     {
         if (!File.Exists(sourcePath))
             throw new FileNotFoundException("素材ファイルが見つかりません。", sourcePath);
@@ -44,7 +54,8 @@ public sealed class ExportService
 
         var clampedSpeed = Clip.ClampSpeed(speed);
         var outputDuration = durationSeconds / clampedSpeed;
-        var filters = BuildFilterArguments(reverse, clampedSpeed);
+        var envelope = BuildFadeEnvelope(audioFadeInSeconds, audioFadeOutSeconds, outputDuration);
+        var filters = BuildFilterArguments(reverse, clampedSpeed, envelope);
         var args = FormattableString.Invariant($"-y -ss {inPointSeconds:F3} -i \"{sourcePath}\" -t {outputDuration:F3}") +
                    $"{filters} " +
                    $"-c:v libx264 -preset {settings.Preset} -crf {settings.Crf} " +
@@ -59,19 +70,52 @@ public sealed class ExportService
     }
 
     /// <summary>
-    /// 逆再生・速度変更の ffmpeg フィルタ引数（" -vf ... -af ..."、先頭に空白）。
-    /// どちらも無ければ空文字。映像の速度変更は setpts=PTS/速度（フレームの時刻を
+    /// フェード設定（タイムライン秒）と出力の長さ（タイムライン秒）から、
+    /// フェード包絡のブレークポイント列を作る。タイムライン書き出しと全く同じ
+    /// Core の計算（AudioGainEnvelope.BuildBreakpoints）を使うため、同じフェード
+    /// 設定では同じ点列になる。フェードが両方とも 0（NaN は 0 として丸める）、
+    /// または長さが正の有限値でないときは null（包絡なし＝従来通り volume
+    /// フィルタを付けない）。フェードがクリップ長を超える・両フェードが重なる
+    /// 場合の丸めは Core 側（フェード長をクリップ長へ丸め、重なりは積）が担う。
+    /// </summary>
+    internal static IReadOnlyList<GainBreakpoint>? BuildFadeEnvelope(
+        double fadeInSeconds, double fadeOutSeconds, double timelineDurationSeconds)
+    {
+        var fadeIn = AudioGainEnvelope.ClampFadeSeconds(fadeInSeconds);
+        var fadeOut = AudioGainEnvelope.ClampFadeSeconds(fadeOutSeconds);
+        if (fadeIn <= 0 && fadeOut <= 0)
+            return null;
+        if (!double.IsFinite(timelineDurationSeconds) || timelineDurationSeconds <= 0)
+            return null;
+
+        var clip = new Clip
+        {
+            StartSeconds = 0,
+            DurationSeconds = timelineDurationSeconds,
+            AudioFadeInSeconds = fadeIn,
+            AudioFadeOutSeconds = fadeOut,
+        };
+        return AudioGainEnvelope.BuildBreakpoints(clip, Array.Empty<AudioSegment>());
+    }
+
+    /// <summary>
+    /// 逆再生・速度変更・フェードの ffmpeg フィルタ引数（" -vf ... -af ..."、先頭に空白）。
+    /// どれも無ければ空文字。映像の速度変更は setpts=PTS/速度（フレームの時刻を
     /// 割り、出力フレームレートで再サンプルされる）。音声はタイムライン書き出しと
     /// 同じ atempo 連鎖（ピッチ保持）を使うため、AudioExportPlanner と同じ規則で組む。
     /// 逆再生と速度変更の順序は、映像は reverse → setpts、音声は areverse → atempo
     /// （逆向きにした後で長さを変える。タイムライン書き出しのフィルタ順序と一致）。
+    /// フェード包絡（envelope、クリップ相対・タイムライン秒のブレークポイント列）は
+    /// 音声チェーンの最後に掛ける。areverse / atempo を通った後のストリーム時刻は
+    /// 出力先頭からタイムライン方向に進むため、ブレークポイントの時刻とそのまま
+    /// 一致する（タイムライン書き出しが asetpts の直後に掛けるのと同じ考え方）。
+    /// 映像フィルタが無い場合は -vf 自体を付けない。
     /// </summary>
-    internal static string BuildFilterArguments(bool reverse, double speed)
+    internal static string BuildFilterArguments(
+        bool reverse, double speed, IReadOnlyList<GainBreakpoint>? envelope = null)
     {
         var clamped = Clip.ClampSpeed(speed);
         var hasSpeed = Math.Abs(clamped - 1.0) > 1e-9;
-        if (!reverse && !hasSpeed)
-            return string.Empty;
 
         var video = new List<string>();
         if (reverse)
@@ -84,8 +128,16 @@ public sealed class ExportService
             audio.Add("areverse");
         if (hasSpeed)
             audio.Add(AtempoChain(clamped));
+        var envelopeFilter = AudioGainEnvelope.BuildVolumeFilter(envelope);
+        if (envelopeFilter.Length > 0)
+            audio.Add(envelopeFilter);
 
-        return $" -vf {string.Join(",", video)} -af {string.Join(",", audio)}";
+        var parts = new List<string>();
+        if (video.Count > 0)
+            parts.Add($"-vf {string.Join(",", video)}");
+        if (audio.Count > 0)
+            parts.Add($"-af {string.Join(",", audio)}");
+        return parts.Count == 0 ? string.Empty : " " + string.Join(" ", parts);
     }
 
     /// <summary>
