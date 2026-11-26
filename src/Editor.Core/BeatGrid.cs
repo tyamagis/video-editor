@@ -24,9 +24,11 @@ public sealed class BeatMap
     /// <summary>BPMとオフセットから等間隔の拍時刻を算出する（方式A）。</summary>
     public static BeatMap FromBpm(double bpm, double offsetSeconds, double durationSeconds)
     {
-        if (bpm <= 0)
+        // NaN・無限大は <= 0 のチェックをすり抜ける。特に bpm=+Inf は間隔 0 になり
+        // 下のループが進まなくなる（無限ループ）ため、有限でない値を弾く。
+        if (!double.IsFinite(bpm) || bpm <= 0)
             throw new ArgumentOutOfRangeException(nameof(bpm), "BPMは0より大きくなければなりません。");
-        if (durationSeconds < 0)
+        if (!double.IsFinite(durationSeconds) || durationSeconds < 0)
             throw new ArgumentOutOfRangeException(nameof(durationSeconds));
 
         var interval = 60.0 / bpm;
@@ -50,7 +52,7 @@ public static class BeatGridCalculator
     /// <summary>1拍の長さ（秒）。</summary>
     public static double BeatIntervalSeconds(double bpm)
     {
-        if (bpm <= 0)
+        if (!double.IsFinite(bpm) || bpm <= 0)
             throw new ArgumentOutOfRangeException(nameof(bpm), "BPMは0より大きくなければなりません。");
         return 60.0 / bpm;
     }

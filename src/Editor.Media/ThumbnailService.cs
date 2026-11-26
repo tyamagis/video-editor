@@ -30,7 +30,7 @@ public sealed class ThumbnailService : IVideoFrameSource
         string sourcePath, double timeSeconds, string outputPath, int width = 320,
         CancellationToken ct = default)
     {
-        var args = $"-y -ss {timeSeconds:F3} -i \"{sourcePath}\" -frames:v 1 -vf scale={width}:-1 -q:v 3 \"{outputPath}\"";
+        var args = FormattableString.Invariant($"-y -ss {timeSeconds:F3} -i \"{sourcePath}\" -frames:v 1 -vf scale={width}:-1 -q:v 3 \"{outputPath}\"");
         var result = await FfmpegProcess.RunAsync(_settings.FfmpegExePath, args, ct).ConfigureAwait(false);
         if (result.ExitCode != 0)
             throw new InvalidOperationException($"サムネイル抽出に失敗しました: {result.StandardError}");
@@ -51,7 +51,7 @@ public sealed class ThumbnailService : IVideoFrameSource
         var tempPath = Path.Combine(Path.GetTempPath(), $"ve-frame-{Guid.NewGuid():N}.png");
         try
         {
-            var args = $"-y -ss {timeSeconds:F3} -i \"{sourcePath}\" -frames:v 1 -vf scale={maxWidth}:-1 \"{tempPath}\"";
+            var args = FormattableString.Invariant($"-y -ss {timeSeconds:F3} -i \"{sourcePath}\" -frames:v 1 -vf scale={maxWidth}:-1 \"{tempPath}\"");
             var result = await FfmpegProcess.RunAsync(_settings.FfmpegExePath, args, ct).ConfigureAwait(false);
             if (result.ExitCode != 0 || !File.Exists(tempPath))
                 return null;

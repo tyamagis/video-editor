@@ -68,7 +68,7 @@ internal static class NewEffectsDetail
         var blurBytes = BoxBlurRgb(srcBytes, width, height, rowBytes, radius);
 
         var dstBytes = new byte[rowBytes * height];
-        for (var y = 0; y < height; y++)
+        Parallel.For(0, height, y =>
         {
             var row = y * rowBytes;
             for (var x = 0; x < width; x++)
@@ -80,7 +80,7 @@ internal static class NewEffectsDetail
                 dstBytes[i + 2] = SharpenChannel(srcBytes[i + 2], blurBytes[i + 2], strength, a);
                 dstBytes[i + 3] = a;
             }
-        }
+        });
         return BitmapFromBytes(dstBytes, width, height);
     }
 
@@ -102,12 +102,12 @@ internal static class NewEffectsDetail
         return current;
     }
 
-    /// <summary>ボックスブラーの横パス（行ごとに BGR 3チャンネルのスライディング和）。</summary>
+    /// <summary>ボックスブラーの横パス（行ごとに BGR 3チャンネルのスライディング和。行は独立なので並列化する）。</summary>
     private static void BoxBlurHorizontal(byte[] src, byte[] dst, int width, int height, int rowBytes, int radius)
     {
         var count = 2 * radius + 1;
         var half = count / 2;
-        for (var y = 0; y < height; y++)
+        Parallel.For(0, height, y =>
         {
             var row = y * rowBytes;
             int sumB = 0, sumG = 0, sumR = 0;
@@ -131,15 +131,15 @@ internal static class NewEffectsDetail
                 sumG += src[enter + 1] - src[leave + 1];
                 sumR += src[enter + 2] - src[leave + 2];
             }
-        }
+        });
     }
 
-    /// <summary>ボックスブラーの縦パス（列ごとに BGR 3チャンネルのスライディング和）。</summary>
+    /// <summary>ボックスブラーの縦パス（列ごとに BGR 3チャンネルのスライディング和。列は独立なので並列化する）。</summary>
     private static void BoxBlurVertical(byte[] src, byte[] dst, int width, int height, int rowBytes, int radius)
     {
         var count = 2 * radius + 1;
         var half = count / 2;
-        for (var x = 0; x < width; x++)
+        Parallel.For(0, width, x =>
         {
             var col = x * 4;
             int sumB = 0, sumG = 0, sumR = 0;
@@ -163,7 +163,7 @@ internal static class NewEffectsDetail
                 sumG += src[enter + 1] - src[leave + 1];
                 sumR += src[enter + 2] - src[leave + 2];
             }
-        }
+        });
     }
 
     /// <summary>1チャンネル分のアンシャープマスク（src + Amount×(src − blur)。0〜アルファに丸める）。</summary>
@@ -210,7 +210,7 @@ internal static class NewEffectsDetail
 
         // 輝度（Rec.709。モノクロ化・エッジ検出と同じ係数）。Premul の RGB をそのまま使う。
         var luma = new int[width * height];
-        for (var y = 0; y < height; y++)
+        Parallel.For(0, height, y =>
         {
             var row = y * rowBytes;
             for (var x = 0; x < width; x++)
@@ -219,14 +219,14 @@ internal static class NewEffectsDetail
                 luma[y * width + x] = (int)Math.Round(
                     0.213 * srcBytes[i + 2] + 0.715 * srcBytes[i + 1] + 0.072 * srcBytes[i]);
             }
-        }
+        });
 
         // 端は座標を画像内に丸める（複製）。1画素しかない画像でも安全。
         int L(int x, int y)
             => luma[Math.Clamp(y, 0, height - 1) * width + Math.Clamp(x, 0, width - 1)];
 
         var dstBytes = new byte[rowBytes * height];
-        for (var y = 0; y < height; y++)
+        Parallel.For(0, height, y =>
         {
             var row = y * rowBytes;
             for (var x = 0; x < width; x++)
@@ -249,7 +249,7 @@ internal static class NewEffectsDetail
                 dstBytes[i + 2] = (byte)Math.Clamp(Math.Round(srcBytes[i + 2] * keep + embossPremul * strength), 0, a);
                 dstBytes[i + 3] = a;
             }
-        }
+        });
         return BitmapFromBytes(dstBytes, width, height);
     }
 }

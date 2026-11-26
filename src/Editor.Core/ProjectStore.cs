@@ -46,21 +46,36 @@ public static class ProjectStore
     public static EditorProject LoadFromJson(string json)
     {
         int version;
-        using (var doc = JsonDocument.Parse(json))
+        try
         {
-            if (!doc.RootElement.TryGetProperty("Version", out var versionElement)
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("Version", out var versionElement)
                 || !versionElement.TryGetInt32(out version))
             {
                 version = 0; // Versionを持たない古い形式は v0 扱い
             }
+        }
+        catch (JsonException ex)
+        {
+            // 壊れた JSON は InvalidDataException に統一する（このメソッドの契約）。
+            throw new InvalidDataException("プロジェクトファイルが壊れています。", ex);
         }
 
         if (version > EditorProject.CurrentVersion)
             throw new InvalidDataException(
                 $"プロジェクトファイルの版 ({version}) がこのソフトの対応版 ({EditorProject.CurrentVersion}) より新しいです。");
 
-        var project = JsonSerializer.Deserialize<EditorProject>(json, JsonDefaults.Indented)
-            ?? throw new InvalidDataException("プロジェクトファイルを読み込めませんでした。");
+        EditorProject project;
+        try
+        {
+            project = JsonSerializer.Deserialize<EditorProject>(json, JsonDefaults.Indented)
+                ?? throw new InvalidDataException("プロジェクトファイルを読み込めませんでした。");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("プロジェクトファイルが壊れています。", ex);
+        }
 
         if (version < EditorProject.CurrentVersion)
             Migrate(project, version);

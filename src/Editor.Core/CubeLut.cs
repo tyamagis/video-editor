@@ -160,15 +160,22 @@ public sealed class CubeLut
         }
 
         // 1D テーブル（あれば先頭 size1D 行）を読み飛ばす。
-        var skip = size1D * 3;
-        var expected = size * size * size * 3;
-        if (values.Count - skip != expected)
+        // size1D が負だと skip が負になり、件数チェックをすり抜けて CopyTo が
+        // 例外を投げるため、ここで弾く。skip の計算は int 溢れを避けて long で行う。
+        if (size1D < 0)
         {
-            error = $"データ数が一致しません（{size}^3 = {expected / 3} 行が必要、実際は {Math.Max(0, values.Count - skip) / 3} 行）。";
+            error = "LUT_1D_SIZE が負です。";
+            return false;
+        }
+        var skip = (long)size1D * 3;
+        var expected = size * size * size * 3;
+        if ((long)values.Count - skip != expected)
+        {
+            error = $"データ数が一致しません（{size}^3 = {expected / 3} 行が必要、実際は {Math.Max(0L, values.Count - skip) / 3} 行）。";
             return false;
         }
         var data = new float[expected];
-        values.CopyTo(skip, data, 0, expected);
+        values.CopyTo((int)skip, data, 0, expected);
         lut = new CubeLut(size, data, title, domainMin, domainMax);
         return true;
     }

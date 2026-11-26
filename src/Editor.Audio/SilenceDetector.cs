@@ -69,16 +69,18 @@ public sealed class SilenceDetector
         if (string.IsNullOrEmpty(audioPath))
             return Fail(audioPath, "音声ファイルが指定されていません。");
 
-        if (durationSeconds <= 0)
+        // NaN・無限大は範囲チェック（<= 0 など）をすり抜けるため、先に有限性を弾く。
+        // 特にしきい値 NaN は FindSilences の比較が全て false になり無限ループになる。
+        if (!double.IsFinite(durationSeconds) || durationSeconds <= 0)
             return Fail(audioPath, "クリップの長さがありません。");
 
-        if (settings.ThresholdDb > 0 || settings.ThresholdDb < -90)
+        if (!double.IsFinite(settings.ThresholdDb) || settings.ThresholdDb > 0 || settings.ThresholdDb < -90)
             return Fail(audioPath, "しきい値は -90〜0 dB の範囲で指定してください。");
 
-        if (settings.MinSilenceSeconds < 0.05)
+        if (!double.IsFinite(settings.MinSilenceSeconds) || settings.MinSilenceSeconds < 0.05)
             return Fail(audioPath, "最短の無音の長さは 0.05 秒以上にしてください。");
 
-        if (settings.MarginSeconds < 0)
+        if (!double.IsFinite(settings.MarginSeconds) || settings.MarginSeconds < 0)
             return Fail(audioPath, "前後の余白は 0 秒以上にしてください。");
 
         string key;

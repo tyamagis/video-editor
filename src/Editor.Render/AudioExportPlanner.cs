@@ -169,7 +169,7 @@ internal sealed class AudioExportPlanner
         // （設計プラン 5章で FFmpeg のフィルタが第一候補。プレビューでは反映されない）。
         // atrim の前に掛けることで、ファイル全体からノイズ特性を取る。
         var denoise = clip.NoiseReductionEnabled
-            ? $"afftdn=nr={NoiseReductionDb(clip.NoiseReductionStrength):F1}:nf=-50,"
+            ? FormattableString.Invariant($"afftdn=nr={NoiseReductionDb(clip.NoiseReductionStrength):F1}:nf=-50,")
             : string.Empty;
         var normalize = VolumeFilter(normalizeGain);
         var reverse = clip.IsReversed ? "areverse," : string.Empty;
@@ -181,7 +181,7 @@ internal sealed class AudioExportPlanner
         // 引いたものと一致する。atrim の前では逆再生・速度変更で対応が壊れ、
         // adelay の後では書き出し範囲の開始位置に依存してしまうため、この位置。
         var envelopeFilter = EnvelopeVolumeFilter(envelope, envelopeStartLocalSeconds);
-        return $"[{index}:a]{denoise}{normalize}atrim=start={sourceStart:F3}:end={sourceEnd:F3}," +
+        return FormattableString.Invariant($"[{index}:a]{denoise}{normalize}atrim=start={sourceStart:F3}:end={sourceEnd:F3},") +
                $"{reverse}{tempo}asetpts=PTS-STARTPTS,{envelopeFilter}adelay={delayMs}:all=1[{label}]";
     }
 
@@ -256,7 +256,7 @@ internal sealed class AudioExportPlanner
             parts.Add("atempo=0.500");
             remaining /= 0.5;
         }
-        parts.Add($"atempo={remaining:F3}");
+        parts.Add(FormattableString.Invariant($"atempo={remaining:F3}"));
         return string.Join(",", parts) + ",";
     }
 
@@ -266,7 +266,7 @@ internal sealed class AudioExportPlanner
 
     /// <summary>ノーマライズのゲイン（線形倍率）を ffmpeg の volume フィルタにする。等倍（1.0）のときは空文字（フィルタを付けない）。</summary>
     internal static string VolumeFilter(double gain)
-        => Math.Abs(gain - 1.0) <= 1e-6 ? string.Empty : $"volume={gain:F4},";
+        => Math.Abs(gain - 1.0) <= 1e-6 ? string.Empty : FormattableString.Invariant($"volume={gain:F4},");
 
 
 }

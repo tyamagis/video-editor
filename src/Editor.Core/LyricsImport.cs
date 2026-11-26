@@ -34,9 +34,13 @@ public sealed class LyricsImportOptions
     /// <summary>設定が有効かを確認する。間隔・長さが 0 以下のときは ArgumentException。</summary>
     public void Validate()
     {
-        if (IntervalSeconds <= 0)
+        // NaN・無限大は <= 0 のチェックをすり抜け、NaN の開始時刻や
+        // 無限大の長さを持つクリップができてしまうため、有限でない値を弾く。
+        if (!double.IsFinite(StartSeconds))
+            throw new ArgumentException("開始時刻は有限の秒数にしてください。", nameof(StartSeconds));
+        if (!double.IsFinite(IntervalSeconds) || IntervalSeconds <= 0)
             throw new ArgumentException("配置間隔は 0 より大きい秒数にしてください。", nameof(IntervalSeconds));
-        if (ClipDurationSeconds <= 0)
+        if (!double.IsFinite(ClipDurationSeconds) || ClipDurationSeconds <= 0)
             throw new ArgumentException("1クリップの長さは 0 より大きい秒数にしてください。", nameof(ClipDurationSeconds));
     }
 }

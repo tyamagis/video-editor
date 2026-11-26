@@ -69,7 +69,7 @@ public sealed class FrameSequenceExporter : ITimelineExporter
                    $"-r {settings.FrameRate} -i -{audioInputs} " +
                    $"-filter_complex \"{graph}\" -map 0:v -map \"[{audioPlan.MapLabel}]\" " +
                    $"-c:v libx264 -preset {settings.Preset} -crf {settings.Crf} " +
-                   $"-pix_fmt yuv420p -c:a aac -b:a {settings.AudioBitrateKbps}k -r {settings.FrameRate} -t {duration:F3} " +
+                   FormattableString.Invariant($"-pix_fmt yuv420p -c:a aac -b:a {settings.AudioBitrateKbps}k -r {settings.FrameRate} -t {duration:F3} ") +
                    $"-movflags +faststart \"{outputPath}\"";
         }
 

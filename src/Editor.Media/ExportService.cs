@@ -45,7 +45,7 @@ public sealed class ExportService
         var clampedSpeed = Clip.ClampSpeed(speed);
         var outputDuration = durationSeconds / clampedSpeed;
         var filters = BuildFilterArguments(reverse, clampedSpeed);
-        var args = $"-y -ss {inPointSeconds:F3} -i \"{sourcePath}\" -t {outputDuration:F3}" +
+        var args = FormattableString.Invariant($"-y -ss {inPointSeconds:F3} -i \"{sourcePath}\" -t {outputDuration:F3}") +
                    $"{filters} " +
                    $"-c:v libx264 -preset {settings.Preset} -crf {settings.Crf} " +
                    $"-pix_fmt yuv420p -r {settings.FrameRate} -s {settings.Width}x{settings.Height} " +
@@ -77,7 +77,7 @@ public sealed class ExportService
         if (reverse)
             video.Add("reverse");
         if (hasSpeed)
-            video.Add($"setpts=PTS/{clamped:F3}");
+            video.Add(FormattableString.Invariant($"setpts=PTS/{clamped:F3}"));
 
         var audio = new List<string>();
         if (reverse)
@@ -108,7 +108,7 @@ public sealed class ExportService
             parts.Add("atempo=0.500");
             remaining /= 0.5;
         }
-        parts.Add($"atempo={remaining:F3}");
+        parts.Add(FormattableString.Invariant($"atempo={remaining:F3}"));
         return string.Join(",", parts);
     }
 }

@@ -2,6 +2,7 @@
 // 解像度・fps・長さを調べ、タイムライン配置と書き出し設定の元にする。
 // 主系は FFMpegCore の FFProbe、失敗時は ffprobe CLI の JSON にフォールバックする。
 
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using Editor.Core;
@@ -61,7 +62,7 @@ public sealed class MediaProbe : IMediaProbe
         var duration = TimeSpan.Zero;
         if (root.TryGetProperty("format", out var format)
             && format.TryGetProperty("duration", out var durationElement)
-            && double.TryParse(durationElement.GetString(), out var seconds))
+            && ParseDurationSeconds(durationElement.GetString()) is { } seconds)
         {
             duration = TimeSpan.FromSeconds(seconds);
         }
@@ -99,19 +100,30 @@ public sealed class MediaProbe : IMediaProbe
         return new MediaInfo(path, duration, width, height, frameRate, hasVideo, hasAudio, videoCodec, audioCodec);
     }
 
-    /// <summary>"30000/1001" 形式のフレームレートを double にする。</summary>
-    private static double ParseFrameRate(string? value)
+    /// <summary>
+    /// ffprobe の duration 文字列（"2.500000" 形式）を秒にする。
+    /// ffprobe の出力は常にドット小数なので、CurrentCulture で読むと
+    /// カンマ小数のロケールで桁区切りと誤解されて壊れる。InvariantCulture で読む。
+    /// 読めなければ null。
+    /// </summary>
+    internal static double? ParseDurationSeconds(string? value)
+        => double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+            ? seconds
+            : null;
+
+    /// <summary>"30000/1001" 形式のフレームレートを double にする。ffprobe の出力なので InvariantCulture で読む。</summary>
+    internal static double ParseFrameRate(string? value)
     {
         if (string.IsNullOrEmpty(value))
             return 0;
         var parts = value.Split('/');
         if (parts.Length == 2
-            && double.TryParse(parts[0], out var numerator)
-            && double.TryParse(parts[1], out var denominator)
+            && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var numerator)
+            && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var denominator)
             && denominator != 0)
         {
             return numerator / denominator;
         }
-        return double.TryParse(value, out var single) ? single : 0;
+        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var single) ? single : 0;
     }
 }

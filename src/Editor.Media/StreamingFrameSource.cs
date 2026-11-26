@@ -210,7 +210,7 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         // 使えない環境では起動直後にフレームが出ないので、呼び出し側で
         // ソフトウェアに切り替えて張り直す（GetFrameAsync 参照）。
         var hwaccel = _hwaccelDisabled ? string.Empty : "-hwaccel auto ";
-        var args = $"-nostdin -loglevel error {hwaccel}-ss {startSeconds:F3} -i \"{sourcePath}\" " +
+        var args = FormattableString.Invariant($"-nostdin -loglevel error {hwaccel}-ss {startSeconds:F3} -i \"{sourcePath}\" ") +
                    $"-an -vf scale={maxWidth}:{outHeight} -pix_fmt bgra -f rawvideo -";
         var startInfo = FfmpegProcess.CreateStartInfo(_settings.FfmpegExePath, args);
 
@@ -353,7 +353,7 @@ public sealed class StreamingFrameSource : IStreamingFrameSource, IDisposable
         for (var attempt = 0; ; attempt++)
         {
             var hwaccel = _hwaccelDisabled ? string.Empty : "-hwaccel auto ";
-            var args = $"-nostdin -loglevel error {hwaccel}-ss {seekStartSeconds:F3} -i \"{sourcePath}\" " +
+            var args = FormattableString.Invariant($"-nostdin -loglevel error {hwaccel}-ss {seekStartSeconds:F3} -i \"{sourcePath}\" ") +
                        $"-an -vf scale={maxWidth}:{outHeight} -pix_fmt bgra -f rawvideo -";
             var startInfo = FfmpegProcess.CreateStartInfo(_settings.FfmpegExePath, args);
             var process = new Process { StartInfo = startInfo };
